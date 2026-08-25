@@ -18,11 +18,16 @@ uv run python -m jenkins_trigger
 docker build -t jenkins-trigger .
 docker run -d \
   -p 8080:8080 -p 8081:8081 \
-  -v /path/to/config:/app/config \
+  -v /path/to/config:/app/config:ro \
   ghcr.io/ravenmk2/jenkins-trigger:dev
 ```
 
-配置(含密钥)不打入镜像, 运行时挂载到 `/app/config`。
+配置(含密钥)不打入镜像, 运行时只读挂载到 `/app/config`。
+
+> **注意**: 容器以非 root 用户运行 (uid/gid `10001`)。宿主机上的配置文件
+> 需要对该用户可读——默认 umask (`022`) 创建的文件即可; 若权限收紧过
+> (如 `600`), 执行 `chmod -R a+rX /path/to/config` 或
+> `chown -R 10001:10001 /path/to/config`。
 
 ## GitLab 侧配置
 

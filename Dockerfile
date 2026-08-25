@@ -29,6 +29,11 @@ COPY src ./src
 
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Run as a dedicated non-root user
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+USER app
+
 EXPOSE 8080 8081
 
 # Config (with secrets) is not baked into the image; mount it at /app/config
