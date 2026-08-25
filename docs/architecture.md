@@ -24,8 +24,8 @@ src/jenkins_trigger/
 - `config/dingtalk.toml` — `[[bots]]`: id, name, token, secret (加签密钥, 可空)
 - `config/jobs/<job-id>.toml` — 文件名即任务 ID:
   - `name`, `gitlab`, `jenkins`, `dingtalk`(可选), `delay`(秒), `default_branch`
-  - `[[repos]]`: `path`(带 group), `job`(Jenkins Job 路径), `branch`(覆盖默认),
-    `priority`(值越小越优先, 同值并行), `trigger`(`params` | `multibranch`), `branch_param`
+  - `[[items]]`: `repo`(带 group 的仓库路径), `job`(Jenkins Job 路径), `branch`(覆盖默认),
+    `priority`(值越小越优先, 同值并行), `parameterized`(bool, 默认 `false`), `build_params`(构建参数, 分支需显式写)
 
 配置在启动时加载; 任务引用的实例 ID 不存在会直接报错。
 
@@ -45,12 +45,12 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
               Executor._scheduler (1s 轮询): execute_at 到期 → 执行中
                            │
                            ▼
-              _make_plan: 匹配分支的仓库
-                        ∪ 任务内上次构建 FAILED/ABORTED 的仓库
+              _make_plan: 匹配分支的执行项
+                        ∪ 任务内上次构建 FAILED/ABORTED 的执行项
                            │
                            ▼
               _execute_plan: 按 priority 分组, 组间串行, 组内并行
-              每个仓库: 触发 → 等 queue 分配 build → 轮询至完成
+              每个执行项: 触发 → 等 queue 分配 build → 轮询至完成
                            │
                            ▼
               钉钉 Markdown 汇总通知 (任务未配置机器人则跳过)
@@ -64,9 +64,10 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
 - **失败重跑**: 执行前查询任务内所有 Jenkins Job 的 `lastBuild`, 结果为
   `FAILURE`/`ABORTED` 的仓库一并加入本次计划(按各自配置的分支触发)。
 - **优先级编排**: `priority` 值越小越早执行; 同值的仓库用 `asyncio.gather` 并行。
-- **Jenkins 触发方式**:
-  - `params`: `POST /job/<path>/buildWithParameters?<branch_param>=<branch>`
-  - `multibranch`: `POST /job/<path>/job/<branch>/build`
+- **Jenkins 触发方式**(`parameterized`):
+  - `true`: `POST /job/<path>/buildWithParameters?<build_params>` (参数原样透传,
+    分支需要时在 `build_params` 显式写; 构建分支恒等于仓库配置的生效分支, 是静态值)
+  - `false`: `POST /job/<path>/build` (纯触发, 不带参数; 配置 `build_params` 会启动报错)
   - 自动获取 CSRF crumb (`/crumbIssuer/api/json`), 未启用防护时跳过。
 - **双端口**: Webhook (8081) 与 API (8080) 是两个独立的 uvicorn Server,
   同进程 asyncio 运行; API 端可仅暴露在内网。

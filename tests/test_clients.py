@@ -8,7 +8,7 @@ import httpx
 import pytest
 import respx
 
-from jenkins_trigger.config import DingTalkBot, JenkinsInstance, RepoConfig
+from jenkins_trigger.config import DingTalkBot, JenkinsInstance, ItemConfig
 from jenkins_trigger.dingtalk import sign
 from jenkins_trigger.jenkins import JenkinsClient, job_url_path
 
@@ -36,30 +36,50 @@ def jenkins_client():
     return JenkinsClient(instance)
 
 
-async def test_trigger_params(jenkins_client):
+async def test_trigger_parameterized(jenkins_client):
+    """参数化构建: build_params 原样透传, 分支按需显式写"""
     with respx.mock(base_url="https://jk.example.com") as mock:
         mock.get("/crumbIssuer/api/json").respond(404)
         route = mock.post("/job/backend/job/app/buildWithParameters").respond(
             201, headers={"Location": "https://jk.example.com/queue/item/42/"}
         )
         queue_url = await jenkins_client.trigger(
-            RepoConfig(path="g/a", job="backend/app"), "master"
+            ItemConfig(repo="g/a", job="backend/app", parameterized=True,
+                       build_params={"BRANCH": "master", "ENV": "prod"}),
+            "master",
         )
     assert queue_url == "https://jk.example.com/queue/item/42/"
-    assert route.calls[0].request.url.params["BRANCH"] == "master"
+    query = route.calls[0].request.url.params
+    assert query["BRANCH"] == "master"
+    assert query["ENV"] == "prod"
     await jenkins_client.close()
 
 
-async def test_trigger_multibranch(jenkins_client):
+async def test_trigger_plain(jenkins_client):
+    """非参数化(默认): 纯触发, 不带参数"""
     with respx.mock(base_url="https://jk.example.com") as mock:
         mock.get("/crumbIssuer/api/json").respond(404)
-        route = mock.post("/job/app/job/feature%2Fx/build").respond(
-            201, headers={"Location": "https://jk.example.com/queue/item/1/"}
+        route = mock.post("/job/app/build").respond(
+            201, headers={"Location": "https://jk.example.com/queue/item/2/"}
+        )
+        await jenkins_client.trigger(ItemConfig(repo="g/a", job="app"), "master")
+    assert route.called
+    assert not route.calls[0].request.url.params
+    await jenkins_client.close()
+
+
+async def test_trigger_parameterized_without_params(jenkins_client):
+    """parameterized=true 且无 build_params: 走 buildWithParameters 但不带参数"""
+    with respx.mock(base_url="https://jk.example.com") as mock:
+        mock.get("/crumbIssuer/api/json").respond(404)
+        route = mock.post("/job/app/buildWithParameters").respond(
+            201, headers={"Location": "https://jk.example.com/queue/item/3/"}
         )
         await jenkins_client.trigger(
-            RepoConfig(path="g/a", job="app", trigger="multibranch"), "feature/x"
+            ItemConfig(repo="g/a", job="app", parameterized=True), "master"
         )
     assert route.called
+    assert not route.calls[0].request.url.params
     await jenkins_client.close()
 
 
@@ -93,6 +113,6 @@ async def test_trigger_uses_crumb(jenkins_client):
         route = mock.post("/job/app/buildWithParameters").respond(
             201, headers={"Location": "https://jk.example.com/queue/item/1/"}
         )
-        await jenkins_client.trigger(RepoConfig(path="g/a", job="app"), "master")
+        await jenkins_client.trigger(ItemConfig(repo="g/a", job="app", parameterized=True), "master")
     assert route.calls[0].request.headers["Jenkins-Crumb"] == "abc"
     await jenkins_client.close()

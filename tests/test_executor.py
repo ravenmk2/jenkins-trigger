@@ -7,9 +7,9 @@ from jenkins_trigger.config import (
     AppConfig,
     DingTalkBot,
     GitLabInstance,
+    ItemConfig,
     JenkinsInstance,
     JobConfig,
-    RepoConfig,
 )
 from jenkins_trigger.executor import (
     STATUS_IDLE,
@@ -27,10 +27,10 @@ def make_config() -> AppConfig:
     job = JobConfig(
         id="job1", name="任务一", gitlab="gl", jenkins="jk", dingtalk="dt",
         delay=10, default_branch="master",
-        repos=[
-            RepoConfig(path="g/a", job="jk/a", priority=2),
-            RepoConfig(path="g/b", job="jk/b", priority=1),
-            RepoConfig(path="g/c", job="jk/c", branch="release", priority=1),
+        items=[
+            ItemConfig(repo="g/a", job="jk/a", priority=2),
+            ItemConfig(repo="g/b", job="jk/b", priority=1),
+            ItemConfig(repo="g/c", job="jk/c", branch="release", priority=1),
         ],
     )
     return AppConfig(
@@ -45,15 +45,15 @@ class FakeJenkins:
         self.ran: list[tuple[str, str]] = []
         self.started: dict[str, asyncio.Event] = {}
 
-    async def get_last_build_result(self, job_path, branch=None, trigger="params"):
+    async def get_last_build_result(self, job_path):
         return self.last_results.get(job_path)
 
-    async def run_repo(self, repo, branch):
-        event = self.started.setdefault(repo.path, asyncio.Event())
+    async def run_item(self, item, branch):
+        event = self.started.setdefault(item.repo, asyncio.Event())
         event.set()
         await asyncio.sleep(0)  # 让出事件循环
-        self.ran.append((repo.path, branch))
-        return BuildResult(repo_path=repo.path, job=repo.job, branch=branch,
+        self.ran.append((item.repo, branch))
+        return BuildResult(repo_path=item.repo, job=item.job, branch=branch,
                            build_number=1, result="SUCCESS")
 
 
@@ -106,17 +106,17 @@ async def test_make_plan_includes_failed(monkeypatch):
     job = executor.config.jobs["job1"]
     # master 推送: b(p1), a(p2) 匹配; c(p1) 上次失败也加入, 按优先级排序
     plan = await executor._make_plan(job, "master")
-    assert [r.path for r in plan] == ["g/b", "g/c", "g/a"]
+    assert [i.repo for i in plan] == ["g/b", "g/c", "g/a"]
     # c 全部成功时不加入
     executor2, _, _ = make_executor(monkeypatch, last_results={"jk/c": "SUCCESS"})
     plan2 = await executor2._make_plan(job, "master")
-    assert [r.path for r in plan2] == ["g/b", "g/a"]
+    assert [i.repo for i in plan2] == ["g/b", "g/a"]
 
 
 async def test_execute_plan_priority_order(monkeypatch):
     executor, fake, _ = make_executor(monkeypatch)
     job = executor.config.jobs["job1"]
-    plan = [job.repos[1], job.repos[0]]  # b(p1) 先于 a(p2)
+    plan = [job.items[1], job.items[0]]  # b(p1) 先于 a(p2)
     await executor._execute_plan(job, plan)
     assert fake.ran == [("g/b", "master"), ("g/a", "master")]
 
@@ -125,7 +125,7 @@ async def test_same_priority_runs_parallel(monkeypatch):
     executor, fake, _ = make_executor(monkeypatch)
     job = executor.config.jobs["job1"]
     # b 和 c 都是 priority=1, 各自分支不同
-    plan = [job.repos[1], job.repos[2]]
+    plan = [job.items[1], job.items[2]]
     results = await executor._execute_plan(job, plan)
     assert sorted(fake.ran) == [("g/b", "master"), ("g/c", "release")]
     assert all(r.ok for r in results)

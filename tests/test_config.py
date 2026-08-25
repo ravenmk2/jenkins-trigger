@@ -12,13 +12,26 @@ def test_load_example_config():
     job = config.jobs["example"]
     assert job.name == "示例发布任务"
     assert job.delay == 60
-    assert len(job.repos) == 3
+    assert len(job.items) == 3
     # 分支覆盖
-    assert job.branch_of(job.repos[0]) == "master"
-    assert job.branch_of(job.repos[2]) == "release"
+    assert job.branch_of(job.items[0]) == "master"
+    assert job.branch_of(job.items[2]) == "release"
     # 触发方式
-    assert job.repos[0].trigger == "params"
-    assert job.repos[2].trigger == "multibranch"
+    assert job.items[0].parameterized is True
+    assert job.items[1].parameterized is False  # 默认值
+    assert job.items[2].parameterized is False
+    # 构建参数(分支显式写)
+    assert job.items[0].build_params == {"BRANCH": "master", "ENV": "prod"}
+    assert job.items[1].build_params == {}
+
+
+def test_non_parameterized_rejects_build_params():
+    from pydantic import ValidationError
+
+    from jenkins_trigger.config import ItemConfig
+
+    with pytest.raises(ValidationError, match="parameterized"):
+        ItemConfig(repo="g/a", job="a", build_params={"X": "1"})
 
 
 def test_invalid_reference(tmp_path):

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class GitLabInstance(BaseModel):
@@ -31,13 +30,22 @@ class DingTalkBot(BaseModel):
     secret: str = ""  # 加签密钥, 可为空
 
 
-class RepoConfig(BaseModel):
-    path: str  # 带 group 的仓库路径, 例: group/project-a
+class ItemConfig(BaseModel):
+    """任务的执行项: Git 仓库与 Jenkins Job 的绑定"""
+
+    repo: str  # 带 group 的仓库路径, 例: group/project-a
     job: str  # Jenkins Job 路径, 例: folder/job-a
     branch: str | None = None  # 触发分支, 覆盖任务默认分支
     priority: int = 100  # 值越小优先级越高, 同优先级并行执行
-    trigger: Literal["params", "multibranch"] = "params"
-    branch_param: str = "BRANCH"  # trigger=params 时透传分支的参数名
+    parameterized: bool = False  # 参数化构建(buildWithParameters); False 则纯触发(/build)
+    build_params: dict[str, str] = Field(default_factory=dict)  # 构建参数, 分支需要时显式写
+
+    @model_validator(mode="after")
+    def _check_build_params(self) -> ItemConfig:
+        # 非参数化构建按定义不带参数, 配了 build_params 属于配置错误, 启动即报
+        if not self.parameterized and self.build_params:
+            raise ValueError(f"仓库 {self.repo}: parameterized=false 不支持 build_params")
+        return self
 
 
 class JobConfig(BaseModel):
@@ -48,10 +56,10 @@ class JobConfig(BaseModel):
     dingtalk: str | None = None  # DingTalkBot.id, 为空则不通知
     delay: int = 0  # 执行延迟(秒)
     default_branch: str = "master"  # 默认触发分支
-    repos: list[RepoConfig] = Field(default_factory=list)
+    items: list[ItemConfig] = Field(default_factory=list)
 
-    def branch_of(self, repo: RepoConfig) -> str:
-        return repo.branch or self.default_branch
+    def branch_of(self, item: ItemConfig) -> str:
+        return item.branch or self.default_branch
 
 
 class AppConfig(BaseModel):

@@ -6,21 +6,22 @@ dingtalk = "ops"     # config/dingtalk.toml 中的机器人 ID, 删除此行则�
 delay = 60           # 执行延迟(秒), 期间再次 Push 会刷新计时(去抖)
 default_branch = "master"
 
-[[repos]]
-path = "group/project-a"      # 带 group 的仓库路径
-job = "backend/project-a"     # Jenkins Job 路径
-priority = 1                  # 值越小优先级越高, 同优先级并行
-trigger = "params"            # buildWithParameters 触发
-branch_param = "BRANCH"       # 透传分支的参数名, 默认 BRANCH
+[[items]]
+repo = "group/project-a"        # 带 group 的仓库路径
+job = "backend/project-a"       # Jenkins Job 路径
+priority = 1                    # 值越小优先级越高, 同优先级并行
+parameterized = true            # 参数化构建: buildWithParameters
+# 构建参数(仅 parameterized=true 可用); 分支需要时显式写
+build_params = {BRANCH = "master", ENV = "prod"}
 
-[[repos]]
-path = "group/project-b"
+[[items]]
+repo = "group/project-b"
 job = "backend/project-b"
 priority = 1
+# parameterized 省略即 false: 纯触发 /job/<job>/build, 不带参数
 
-[[repos]]
-path = "group/frontend"
+[[items]]
+repo = "group/frontend"
 job = "frontend/app"
-branch = "release"            # 覆盖默认触发分支
-priority = 2                  # 晚于 priority=1 的仓库执行
-trigger = "multibranch"       # 多分支流水线: 触发 /job/<job>/job/<branch>/build
+branch = "release"              # 覆盖默认触发分支
+priority = 2                    # 晚于 priority=1 的执行项

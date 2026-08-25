@@ -39,11 +39,13 @@ docker run -d \
 
 ## 任务配置
 
-每个任务一个文件 `config/jobs/<job-id>.toml`, 示例见 `example/jobs/example.toml`:
+每个任务一个文件 `config/jobs/<job-id>.toml`, 示例见 `example/jobs/example.toml`。
+每个任务包含多个执行项 `[[items]]`(`repo` 仓库 + `job` Jenkins Job 的绑定):
 
 - `delay` — 收到 Push 后延迟多少秒执行, 期间再次 Push 会刷新计时(去抖)
-- `priority` — 仓库优先级, 值越小越早执行, 同值并行
-- `trigger` — `params`(buildWithParameters 传分支) 或 `multibranch`(多分支流水线)
+- `priority` — 执行项优先级, 值越小越早执行, 同值并行
+- `parameterized` — `true` 时走 `buildWithParameters` 传参, `false`(默认) 纯触发 `/build`
+- `build_params` — 构建参数字典(仅 `parameterized = true` 可用); 分支需要时显式写, 如 `BRANCH = "master"`
 
 执行前会自动把任务内上次构建失败(`FAILURE`/`ABORTED`)的仓库一并加入本次计划重跑。
 

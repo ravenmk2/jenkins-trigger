@@ -9,7 +9,7 @@ from itertools import groupby
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from .config import AppConfig, JobConfig, RepoConfig
+from .config import AppConfig, ItemConfig, JobConfig
 from .dingtalk import DingTalkClient
 from .jenkins import BuildResult, JenkinsClient
 
@@ -113,8 +113,8 @@ class Executor:
             if job.gitlab != event.gitlab_id:
                 continue
             if any(
-                repo.path == event.repo_path and job.branch_of(repo) == event.branch
-                for repo in job.repos
+                item.repo == event.repo_path and job.branch_of(item) == event.branch
+                for item in job.items
             ):
                 matched.append(job)
         return matched
@@ -168,36 +168,34 @@ class Executor:
                 state.status = STATUS_IDLE
                 state.execute_at = None
 
-    async def _make_plan(self, job: JobConfig, branch: str) -> list[RepoConfig]:
-        """制定执行计划: 匹配分支的仓库 + 上次构建失败的仓库"""
+    async def _make_plan(self, job: JobConfig, branch: str) -> list[ItemConfig]:
+        """制定执行计划: 匹配分支的执行项 + 上次构建失败的执行项"""
         jenkins = self.jenkins_client(job.jenkins)
-        plan: dict[str, RepoConfig] = {
-            repo.path: repo for repo in job.repos if job.branch_of(repo) == branch
+        plan: dict[str, ItemConfig] = {
+            item.repo: item for item in job.items if job.branch_of(item) == branch
         }
-        for repo in job.repos:
-            if repo.path in plan:
+        for item in job.items:
+            if item.repo in plan:
                 continue
             try:
-                result = await jenkins.get_last_build_result(
-                    repo.job, job.branch_of(repo), repo.trigger
-                )
+                result = await jenkins.get_last_build_result(item.job)
             except Exception as exc:  # noqa: BLE001 - 查询失败不阻塞计划
-                logger.warning("查询 {} 最后构建状态失败: {}", repo.job, exc)
+                logger.warning("查询 {} 最后构建状态失败: {}", item.job, exc)
                 continue
             if result in FAILED_RESULTS:
-                logger.info("仓库 {} 上次构建为 {}, 加入执行计划", repo.path, result)
-                plan[repo.path] = repo
-        return sorted(plan.values(), key=lambda r: r.priority)
+                logger.info("仓库 {} 上次构建为 {}, 加入执行计划", item.repo, result)
+                plan[item.repo] = item
+        return sorted(plan.values(), key=lambda i: i.priority)
 
-    async def _execute_plan(self, job: JobConfig, plan: list[RepoConfig]) -> list[BuildResult]:
+    async def _execute_plan(self, job: JobConfig, plan: list[ItemConfig]) -> list[BuildResult]:
         """按优先级执行: 同优先级并行, 不同优先级按值从小到大串行"""
         jenkins = self.jenkins_client(job.jenkins)
         results: list[BuildResult] = []
-        for priority, group in groupby(plan, key=lambda r: r.priority):
-            repos = list(group)
-            logger.info("任务 {} 执行优先级 {} 的 {} 个仓库", job.id, priority, len(repos))
+        for priority, group in groupby(plan, key=lambda i: i.priority):
+            items = list(group)
+            logger.info("任务 {} 执行优先级 {} 的 {} 个执行项", job.id, priority, len(items))
             group_results = await asyncio.gather(
-                *(jenkins.run_repo(repo, job.branch_of(repo)) for repo in repos)
+                *(jenkins.run_item(item, job.branch_of(item)) for item in items)
             )
             results.extend(group_results)
         return results
