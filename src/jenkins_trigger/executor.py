@@ -33,6 +33,7 @@ class JobState(BaseModel):
     job: JobConfig
     status: str = STATUS_IDLE
     execute_at: float | None = None  # time.monotonic()
+    trigger_repo: str | None = None  # 触发本次执行的仓库
     trigger_branch: str | None = None  # 触发本次执行的分支
     last_results: list[dict] = Field(default_factory=list)
 
@@ -44,6 +45,7 @@ class JobState(BaseModel):
             "execute_in_seconds": round(max(0, self.execute_at - time.monotonic()), 1)
             if self.status == STATUS_PENDING and self.execute_at
             else None,
+            "trigger_repo": self.trigger_repo,
             "trigger_branch": self.trigger_branch,
             "last_results": self.last_results,
         }
@@ -104,7 +106,7 @@ class Executor:
             logger.debug("无任务匹配: {} {} {}", event.gitlab_id, event.repo_path, event.branch)
             return
         for job in matched:
-            self.mark_pending(job, event.branch)
+            self.mark_pending(job, event.repo_path, event.branch)
 
     def match_jobs(self, event: PushEvent) -> list[JobConfig]:
         """按 GitLab 实例 + 仓库路径 + 分支(仓库分支覆盖默认分支)匹配任务"""
@@ -119,13 +121,14 @@ class Executor:
                 matched.append(job)
         return matched
 
-    def mark_pending(self, job: JobConfig, branch: str) -> None:
+    def mark_pending(self, job: JobConfig, repo: str, branch: str) -> None:
         """标记为待执行并刷新执行时间(当前时间+延迟), 实现去抖"""
         state = self.states[job.id]
         state.status = STATUS_PENDING
         state.execute_at = time.monotonic() + job.delay
+        state.trigger_repo = repo
         state.trigger_branch = branch
-        logger.info("任务 {} 标记为待执行, {} 秒后执行", job.id, job.delay)
+        logger.info("任务 {} 标记为待执行, {} 秒后执行 ({} {})", job.id, job.delay, repo, branch)
 
     # ---- 调度与执行 ----
 
@@ -144,12 +147,13 @@ class Executor:
 
     async def _run(self, state: JobState) -> None:
         job = state.job
+        repo = state.trigger_repo
         branch = state.trigger_branch or job.default_branch
         self._running.add(job.id)
         state.status = STATUS_RUNNING
-        logger.info("任务 {} 开始执行 (分支 {})", job.id, branch)
+        logger.info("任务 {} 开始执行 ({} {})", job.id, repo, branch)
         try:
-            plan = await self._make_plan(job, branch)
+            plan = await self._make_plan(job, repo, branch)
             if not plan:
                 logger.warning("任务 {} 执行计划为空, 跳过", job.id)
                 return
@@ -168,8 +172,8 @@ class Executor:
                 state.status = STATUS_IDLE
                 state.execute_at = None
 
-    async def _make_plan(self, job: JobConfig, branch: str) -> list[ItemConfig]:
-        """制定执行计划: 匹配分支的执行项 + 上次构建失败的执行项
+    async def _make_plan(self, job: JobConfig, repo: str | None, branch: str) -> list[ItemConfig]:
+        """制定执行计划: 本次 push 仓库的执行项 + 上次构建失败的执行项
 
         以 (repo, job) 去重: 同一仓库可绑定多个 Jenkins Job, 都会进入计划;
         完全相同的 (repo, job) 视为重复配置, 去重。
@@ -178,7 +182,7 @@ class Executor:
         plan: dict[tuple[str, str], ItemConfig] = {
             (item.repo, item.job): item
             for item in job.items
-            if job.branch_of(item) == branch
+            if (repo is None or item.repo == repo) and job.branch_of(item) == branch
         }
         for item in job.items:
             key = (item.repo, item.job)

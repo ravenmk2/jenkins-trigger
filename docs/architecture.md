@@ -45,7 +45,7 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
               Executor._scheduler (1s 轮询): execute_at 到期 → 执行中
                            │
                            ▼
-              _make_plan: 匹配分支的执行项
+              _make_plan: 本次 push 仓库的执行项
                         ∪ 任务内上次构建 FAILED/ABORTED 的执行项
                            │
                            ▼
@@ -61,6 +61,8 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
 - **任务状态机**: `空闲 → 待执行 → 执行中 → 空闲`。状态仅存内存, 重启后丢失待执行任务。
 - **去抖**: 延迟窗口内的再次 Push 只刷新 `execute_at`, 不重复入队。
 - **执行中再收到 Push**: 重新标记为待执行, 当前执行完成后由调度器再次拉起。
+- **执行范围**: 每次执行的起点是**本次 push 的仓库**对应的执行项(而非任务内所有
+  分支匹配的执行项), 叠加失败重跑项; 任务状态上记录 `trigger_repo`/`trigger_branch`。
 - **失败重跑**: 执行前查询任务内所有 Jenkins Job 的 `lastBuild`, 结果为
   `FAILURE`/`ABORTED` 的仓库一并加入本次计划(按各自配置的分支触发)。
 - **同仓库多 Job**: 同一 `repo` 可出现在多个执行项中(绑定不同 Jenkins Job),

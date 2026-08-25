@@ -92,10 +92,10 @@ def test_match_jobs(monkeypatch):
 def test_mark_pending_debounce(monkeypatch):
     executor, _, _ = make_executor(monkeypatch)
     job = executor.config.jobs["job1"]
-    executor.mark_pending(job, "master")
+    executor.mark_pending(job, "g/a", "master")
     first = executor.states["job1"].execute_at
     time.sleep(0.01)
-    executor.mark_pending(job, "master")
+    executor.mark_pending(job, "g/a", "master")
     state = executor.states["job1"]
     assert state.status == STATUS_PENDING
     assert state.execute_at > first  # 执行时间被刷新
@@ -104,13 +104,13 @@ def test_mark_pending_debounce(monkeypatch):
 async def test_make_plan_includes_failed(monkeypatch):
     executor, _, _ = make_executor(monkeypatch, last_results={"jk/c": "FAILURE", "jk/b": "SUCCESS"})
     job = executor.config.jobs["job1"]
-    # master 推送: b(p1), a(p2) 匹配; c(p1) 上次失败也加入, 按优先级排序
-    plan = await executor._make_plan(job, "master")
-    assert [i.repo for i in plan] == ["g/b", "g/c", "g/a"]
+    # push g/a master: 计划起点只有 a(p2); c(p1) 上次失败也加入, 按优先级排序
+    plan = await executor._make_plan(job, "g/a", "master")
+    assert [(i.repo, i.job) for i in plan] == [("g/c", "jk/c"), ("g/a", "jk/a")]
     # c 全部成功时不加入
     executor2, _, _ = make_executor(monkeypatch, last_results={"jk/c": "SUCCESS"})
-    plan2 = await executor2._make_plan(job, "master")
-    assert [i.repo for i in plan2] == ["g/b", "g/a"]
+    plan2 = await executor2._make_plan(job, "g/a", "master")
+    assert [(i.repo, i.job) for i in plan2] == [("g/a", "jk/a")]
 
 
 async def test_same_repo_different_jobs_both_in_plan(monkeypatch):
@@ -119,10 +119,11 @@ async def test_same_repo_different_jobs_both_in_plan(monkeypatch):
     job = executor.config.jobs["job1"]
     job.items.append(ItemConfig(repo="g/a", job="jk/a-deploy", priority=1))
     job.items.append(ItemConfig(repo="g/a", job="jk/a", priority=3))  # 重复项, 应去重
-    plan = await executor._make_plan(job, "master")
-    assert [(i.repo, i.job) for i in plan] == [
-        ("g/b", "jk/b"), ("g/a", "jk/a-deploy"), ("g/a", "jk/a"),
-    ]
+    plan = await executor._make_plan(job, "g/a", "master")
+    assert [(i.repo, i.job) for i in plan] == [("g/a", "jk/a-deploy"), ("g/a", "jk/a")]
+    # push 其它仓库时 g/a 的执行项不进入计划
+    plan2 = await executor._make_plan(job, "g/b", "master")
+    assert [(i.repo, i.job) for i in plan2] == [("g/b", "jk/b")]
 
 
 async def test_execute_plan_priority_order(monkeypatch):
@@ -146,14 +147,14 @@ async def test_same_priority_runs_parallel(monkeypatch):
 async def test_run_end_to_end_notifies(monkeypatch):
     executor, fake_jenkins, fake_dingtalk = make_executor(monkeypatch)
     job = executor.config.jobs["job1"]
-    executor.mark_pending(job, "master")
+    executor.mark_pending(job, "g/a", "master")
     state = executor.states["job1"]
     state.execute_at = time.monotonic()  # 立即到期
     await executor._run(state)
     assert state.status == STATUS_IDLE
-    assert len(fake_jenkins.ran) == 2  # master 匹配 a, b
+    assert fake_jenkins.ran == [("g/a", "master")]  # 只跑 push 仓库的执行项
     assert len(fake_dingtalk.messages) == 1
-    assert len(state.last_results) == 2
+    assert len(state.last_results) == 1
 
 
 async def test_scheduler_picks_up_due_jobs(monkeypatch):
@@ -165,7 +166,7 @@ async def test_scheduler_picks_up_due_jobs(monkeypatch):
     job.delay = 0
     scheduler = asyncio.create_task(executor._scheduler())
     try:
-        executor.mark_pending(job, "master")
-        await asyncio.wait_for(fake.started.setdefault("g/b", asyncio.Event()).wait(), 2)
+        executor.mark_pending(job, "g/a", "master")
+        await asyncio.wait_for(fake.started.setdefault("g/a", asyncio.Event()).wait(), 2)
     finally:
         scheduler.cancel()
