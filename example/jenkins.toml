@@ -1,0 +1,7 @@
+# Jenkins 实例配置, 可配置多个
+[[instances]]
+id = "main"
+name = "示例 Jenkins"
+url = "https://jenkins.example.com"
+username = "bot"
+token = "change-me"  # Jenkins API Token

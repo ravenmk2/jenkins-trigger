@@ -1,0 +1,6 @@
+# GitLab 实例配置, 可配置多个
+[[instances]]
+id = "main"
+name = "示例 GitLab"
+url = "https://gitlab.example.com"
+webhook_token = "change-me"  # GitLab Webhook 的 Secret Token

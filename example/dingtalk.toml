@@ -1,0 +1,6 @@
+# 钉钉机器人配置, 可配置多个
+[[bots]]
+id = "ops"
+name = "运维通知群"
+token = "change-me"  # access_token
+secret = ""          # 加签密钥, 未启用加签则留空

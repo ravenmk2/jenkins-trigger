@@ -1,0 +1,38 @@
+[project]
+name = "jenkins-trigger"
+version = "0.1.0"
+description = "Jenkins Job 自动化执行工具: 监听 GitLab Webhook 并按优先级编排触发 Jenkins Job"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "loguru>=0.7",
+    "pydantic>=2.7",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jenkins_trigger"]
+
+[tool.uv]
+# 默认 PyPI 源替换为阿里云镜像
+[[tool.uv.index]]
+name = "aliyun"
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

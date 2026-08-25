@@ -1,0 +1,7 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+dist
+# 真实配置含密钥, 不提交; 示例在 example/
+config
