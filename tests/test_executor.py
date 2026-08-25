@@ -113,6 +113,18 @@ async def test_make_plan_includes_failed(monkeypatch):
     assert [i.repo for i in plan2] == ["g/b", "g/a"]
 
 
+async def test_same_repo_different_jobs_both_in_plan(monkeypatch):
+    """同一仓库绑定多个 Jenkins Job: 都进入计划; 完全相同项去重"""
+    executor, _, _ = make_executor(monkeypatch)
+    job = executor.config.jobs["job1"]
+    job.items.append(ItemConfig(repo="g/a", job="jk/a-deploy", priority=1))
+    job.items.append(ItemConfig(repo="g/a", job="jk/a", priority=3))  # 重复项, 应去重
+    plan = await executor._make_plan(job, "master")
+    assert [(i.repo, i.job) for i in plan] == [
+        ("g/b", "jk/b"), ("g/a", "jk/a-deploy"), ("g/a", "jk/a"),
+    ]
+
+
 async def test_execute_plan_priority_order(monkeypatch):
     executor, fake, _ = make_executor(monkeypatch)
     job = executor.config.jobs["job1"]

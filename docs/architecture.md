@@ -63,6 +63,8 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
 - **执行中再收到 Push**: 重新标记为待执行, 当前执行完成后由调度器再次拉起。
 - **失败重跑**: 执行前查询任务内所有 Jenkins Job 的 `lastBuild`, 结果为
   `FAILURE`/`ABORTED` 的仓库一并加入本次计划(按各自配置的分支触发)。
+- **同仓库多 Job**: 同一 `repo` 可出现在多个执行项中(绑定不同 Jenkins Job),
+  全部进入计划; 执行计划按 `(repo, job)` 去重, 完全相同的重复项只执行一次。
 - **优先级编排**: `priority` 值越小越早执行; 同值的仓库用 `asyncio.gather` 并行。
 - **Jenkins 触发方式**(`parameterized`):
   - `true`: `POST /job/<path>/buildWithParameters?<build_params>` (参数原样透传,

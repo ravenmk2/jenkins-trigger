@@ -48,6 +48,7 @@ docker run -d \
 - `build_params` — 构建参数字典(仅 `parameterized = true` 可用); 分支需要时显式写, 如 `BRANCH = "master"`
 
 执行前会自动把任务内上次构建失败(`FAILURE`/`ABORTED`)的仓库一并加入本次计划重跑。
+同一仓库可绑定多个 Jenkins Job(写多个 `[[items]]`), 都会执行。
 
 ## API
 

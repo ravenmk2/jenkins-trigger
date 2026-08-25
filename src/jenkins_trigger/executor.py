@@ -169,13 +169,20 @@ class Executor:
                 state.execute_at = None
 
     async def _make_plan(self, job: JobConfig, branch: str) -> list[ItemConfig]:
-        """制定执行计划: 匹配分支的执行项 + 上次构建失败的执行项"""
+        """制定执行计划: 匹配分支的执行项 + 上次构建失败的执行项
+
+        以 (repo, job) 去重: 同一仓库可绑定多个 Jenkins Job, 都会进入计划;
+        完全相同的 (repo, job) 视为重复配置, 去重。
+        """
         jenkins = self.jenkins_client(job.jenkins)
-        plan: dict[str, ItemConfig] = {
-            item.repo: item for item in job.items if job.branch_of(item) == branch
+        plan: dict[tuple[str, str], ItemConfig] = {
+            (item.repo, item.job): item
+            for item in job.items
+            if job.branch_of(item) == branch
         }
         for item in job.items:
-            if item.repo in plan:
+            key = (item.repo, item.job)
+            if key in plan:
                 continue
             try:
                 result = await jenkins.get_last_build_result(item.job)
@@ -184,7 +191,7 @@ class Executor:
                 continue
             if result in FAILED_RESULTS:
                 logger.info("仓库 {} 上次构建为 {}, 加入执行计划", item.repo, result)
-                plan[item.repo] = item
+                plan[key] = item
         return sorted(plan.values(), key=lambda i: i.priority)
 
     async def _execute_plan(self, job: JobConfig, plan: list[ItemConfig]) -> list[BuildResult]:
