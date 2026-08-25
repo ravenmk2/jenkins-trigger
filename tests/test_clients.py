@@ -83,7 +83,7 @@ async def test_trigger_parameterized_without_params(jenkins_client):
     await jenkins_client.close()
 
 
-async def test_build_summary_format():
+async def test_build_notifications():
     from jenkins_trigger.dingtalk import DingTalkClient
     from jenkins_trigger.jenkins import BuildResult
 
@@ -95,19 +95,26 @@ async def test_build_summary_format():
 
     client.send_markdown = fake_send
 
+    await client.send_build_started("发布任务", "20260825-001",
+                                    [("g/a", "master"), ("g/b", "release")])
+    title, text = sent[0]
+    assert title == "Jenkins 构建开始: 发布任务"
+    assert "20260825-001" in text
+    assert "- `g/a` (master)" in text
+    assert "- `g/b` (release)" in text
+
     results = [
         BuildResult(repo_path="g/a", job="backend/app", branch="master",
                     build_number=42, result="SUCCESS"),
         BuildResult(repo_path="g/b", job="backend/b", branch="master", error="timeout"),
     ]
-    await client.send_build_summary("发布任务", results)
-
-    title, text = sent[0]
-    assert title == "Jenkins 报告: 发布任务"
-    assert "### Jenkins 报告: 发布任务" in text
+    await client.send_build_summary("发布任务", "20260825-001", results)
+    title, text = sent[1]
+    assert title == "Jenkins 构建结束: 发布任务"
+    assert "20260825-001" in text
     assert "- ✅ backend/app #42 SUCCESS" in text
     assert "- ❌ backend/b - timeout" in text
-    assert "g/a" not in text  # 不再包含仓库/分支信息
+    assert "g/a" not in text  # 列表项不含仓库/分支信息
     await client.close()
 
 

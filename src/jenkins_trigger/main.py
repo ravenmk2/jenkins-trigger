@@ -17,7 +17,14 @@ from .webhook import create_webhook_app
 
 async def serve() -> None:
     logger.remove()
-    logger.add(sys.stderr, level=os.getenv("LOG_LEVEL", "INFO"))
+    logger.configure(extra={"exec_id": "-"})  # 未绑定执行 ID 的日志占位
+    logger.add(
+        sys.stderr,
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level>"
+        " | <cyan>{extra[exec_id]}</cyan> | <cyan>{name}</cyan>:<cyan>{function}</cyan>"
+        ":<cyan>{line}</cyan> - <level>{message}</level>",
+    )
 
     config_dir = os.getenv("JENKINS_TRIGGER_CONFIG", "config")
     config = load_config(config_dir)

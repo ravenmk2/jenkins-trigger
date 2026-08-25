@@ -49,9 +49,17 @@ class DingTalkClient:
             raise RuntimeError(f"钉钉发送失败: {data}")
         logger.info("钉钉通知已发送: {}", title)
 
-    async def send_build_summary(self, job_name: str, results: list[BuildResult]) -> None:
-        title = f"Jenkins 报告: {job_name}"
-        lines = [f"### {title}", ""]
+    async def send_build_started(self, job_name: str, exec_id: str,
+                                 triggers: list[tuple[str, str]]) -> None:
+        title = f"Jenkins 构建开始: {job_name}"
+        lines = [f"### {title}", "", f"执行 ID: `{exec_id}`", "", "已计划:"]
+        lines += [f"- `{repo}` ({branch})" for repo, branch in triggers]
+        await self.send_markdown(title, "\n".join(lines))
+
+    async def send_build_summary(self, job_name: str, exec_id: str,
+                                 results: list[BuildResult]) -> None:
+        title = f"Jenkins 构建结束: {job_name}"
+        lines = [f"### {title}", "", f"执行 ID: `{exec_id}`", ""]
         for r in results:
             icon = "✅" if r.ok else "❌"
             number = f"#{r.build_number}" if r.build_number else "-"

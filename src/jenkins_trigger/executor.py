@@ -33,8 +33,8 @@ class JobState(BaseModel):
     job: JobConfig
     status: str = STATUS_IDLE
     execute_at: float | None = None  # time.monotonic()
-    trigger_repo: str | None = None  # 触发本次执行的仓库
-    trigger_branch: str | None = None  # 触发本次执行的分支
+    exec_id: str | None = None  # 执行 ID: 一轮执行一个(日期+当日流水号)
+    triggers: set[tuple[str, str]] = Field(default_factory=set)  # 待执行的 (仓库, 分支) 集合
     last_results: list[dict] = Field(default_factory=list)
 
     def snapshot(self) -> dict:
@@ -42,11 +42,11 @@ class JobState(BaseModel):
             "id": self.job.id,
             "name": self.job.name,
             "status": self.status,
+            "exec_id": self.exec_id,
             "execute_in_seconds": round(max(0, self.execute_at - time.monotonic()), 1)
             if self.status == STATUS_PENDING and self.execute_at
             else None,
-            "trigger_repo": self.trigger_repo,
-            "trigger_branch": self.trigger_branch,
+            "triggers": sorted(f"{repo} ({branch})" for repo, branch in self.triggers),
             "last_results": self.last_results,
         }
 
@@ -62,6 +62,17 @@ class Executor:
         self._jenkins: dict[str, JenkinsClient] = {}
         self._dingtalk: dict[str, DingTalkClient] = {}
         self._tasks: list[asyncio.Task] = []
+        self._exec_date = ""
+        self._exec_seq = 0
+
+    def _next_exec_id(self) -> str:
+        """执行 ID: 日期 + 当日流水号(3位), 跨天重新计数"""
+        today = time.strftime("%Y%m%d")
+        if today != self._exec_date:
+            self._exec_date = today
+            self._exec_seq = 0
+        self._exec_seq += 1
+        return f"{today}-{self._exec_seq:03d}"
 
     def jenkins_client(self, instance_id: str) -> JenkinsClient:
         if instance_id not in self._jenkins:
@@ -122,13 +133,20 @@ class Executor:
         return matched
 
     def mark_pending(self, job: JobConfig, repo: str, branch: str) -> None:
-        """标记为待执行并刷新执行时间(当前时间+延迟), 实现去抖"""
+        """标记为待执行并刷新执行时间(当前时间+延迟), 实现去抖
+
+        去抖窗口内的多个 (仓库, 分支) 累积到 triggers, 本轮一并执行;
+        每一轮(非待执行状态下的标记)生成新的 exec_id。
+        """
         state = self.states[job.id]
+        if state.status != STATUS_PENDING:
+            state.exec_id = self._next_exec_id()
         state.status = STATUS_PENDING
         state.execute_at = time.monotonic() + job.delay
-        state.trigger_repo = repo
-        state.trigger_branch = branch
-        logger.info("任务 {} 标记为待执行, {} 秒后执行 ({} {})", job.id, job.delay, repo, branch)
+        state.triggers.add((repo, branch))
+        logger.bind(exec_id=state.exec_id).info(
+            "任务 {} 标记为待执行, {} 秒后执行 ({} {})", job.id, job.delay, repo, branch
+        )
 
     # ---- 调度与执行 ----
 
@@ -147,33 +165,37 @@ class Executor:
 
     async def _run(self, state: JobState) -> None:
         job = state.job
-        repo = state.trigger_repo
-        branch = state.trigger_branch or job.default_branch
+        # 取走本轮触发集合并清空: 执行期间新到的事件进入下一轮
+        triggers = set(state.triggers)
+        state.triggers.clear()
         self._running.add(job.id)
         state.status = STATUS_RUNNING
-        logger.info("任务 {} 开始执行 ({} {})", job.id, repo, branch)
-        try:
-            plan = await self._make_plan(job, repo, branch)
-            if not plan:
-                logger.warning("任务 {} 执行计划为空, 跳过", job.id)
-                return
-            results = await self._execute_plan(job, plan)
-            state.last_results = [
-                {"repo": r.repo_path, "branch": r.branch, "job": r.job,
-                 "build_number": r.build_number, "result": r.result, "error": r.error}
-                for r in results
-            ]
-            await self._notify(job, results)
-        except Exception:
-            logger.exception("任务 {} 执行异常", job.id)
-        finally:
-            self._running.discard(job.id)
-            if state.status == STATUS_RUNNING:
-                state.status = STATUS_IDLE
-                state.execute_at = None
+        # 本轮执行内所有日志(含 jenkins/dingtalk 模块)都带 exec_id
+        with logger.contextualize(exec_id=state.exec_id or "-"):
+            logger.info("任务 {} 开始执行 ({})", job.id, ", ".join(f"{r} {b}" for r, b in sorted(triggers)))
+            try:
+                await self._notify_started(job, state, triggers)
+                plan = await self._make_plan(job, triggers)
+                if not plan:
+                    logger.warning("任务 {} 执行计划为空, 跳过", job.id)
+                    return
+                results = await self._execute_plan(job, plan)
+                state.last_results = [
+                    {"repo": r.repo_path, "branch": r.branch, "job": r.job,
+                     "build_number": r.build_number, "result": r.result, "error": r.error}
+                    for r in results
+                ]
+                await self._notify(job, state, results)
+            except Exception:
+                logger.exception("任务 {} 执行异常", job.id)
+            finally:
+                self._running.discard(job.id)
+                if state.status == STATUS_RUNNING:
+                    state.status = STATUS_IDLE
+                    state.execute_at = None
 
-    async def _make_plan(self, job: JobConfig, repo: str | None, branch: str) -> list[ItemConfig]:
-        """制定执行计划: 本次 push 仓库的执行项 + 上次构建失败的执行项
+    async def _make_plan(self, job: JobConfig, triggers: set[tuple[str, str]]) -> list[ItemConfig]:
+        """制定执行计划: 触发集合内 (仓库, 分支) 的执行项 + 上次构建失败的执行项
 
         以 (repo, job) 去重: 同一仓库可绑定多个 Jenkins Job, 都会进入计划;
         完全相同的 (repo, job) 视为重复配置, 去重。
@@ -182,7 +204,7 @@ class Executor:
         plan: dict[tuple[str, str], ItemConfig] = {
             (item.repo, item.job): item
             for item in job.items
-            if (repo is None or item.repo == repo) and job.branch_of(item) == branch
+            if (item.repo, job.branch_of(item)) in triggers
         }
         for item in job.items:
             key = (item.repo, item.job)
@@ -211,10 +233,24 @@ class Executor:
             results.extend(group_results)
         return results
 
-    async def _notify(self, job: JobConfig, results: list[BuildResult]) -> None:
+    async def _notify_started(self, job: JobConfig, state: JobState,
+                              triggers: set[tuple[str, str]]) -> None:
+        """开始执行的通知(在任何 Jenkins API 调用之前)"""
         if not job.dingtalk:
             return
         try:
-            await self.dingtalk_client(job.dingtalk).send_build_summary(job.name, results)
+            await self.dingtalk_client(job.dingtalk).send_build_started(
+                job.name, state.exec_id or "-", sorted(triggers)
+            )
+        except Exception:
+            logger.exception("任务 {} 钉钉开始通知发送失败", job.id)
+
+    async def _notify(self, job: JobConfig, state: JobState, results: list[BuildResult]) -> None:
+        if not job.dingtalk:
+            return
+        try:
+            await self.dingtalk_client(job.dingtalk).send_build_summary(
+                job.name, state.exec_id or "-", results
+            )
         except Exception:
             logger.exception("任务 {} 钉钉通知发送失败", job.id)
