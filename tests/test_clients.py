@@ -83,6 +83,34 @@ async def test_trigger_parameterized_without_params(jenkins_client):
     await jenkins_client.close()
 
 
+async def test_build_summary_format():
+    from jenkins_trigger.dingtalk import DingTalkClient
+    from jenkins_trigger.jenkins import BuildResult
+
+    client = DingTalkClient(DingTalkBot(id="dt", token="t"))
+    sent = []
+
+    async def fake_send(title, text):
+        sent.append((title, text))
+
+    client.send_markdown = fake_send
+
+    results = [
+        BuildResult(repo_path="g/a", job="backend/app", branch="master",
+                    build_number=42, result="SUCCESS"),
+        BuildResult(repo_path="g/b", job="backend/b", branch="master", error="timeout"),
+    ]
+    await client.send_build_summary("发布任务", results)
+
+    title, text = sent[0]
+    assert title == "Jenkins 报告: 发布任务"
+    assert "### Jenkins 报告: 发布任务" in text
+    assert "- ✅ backend/app #42 SUCCESS" in text
+    assert "- ❌ backend/b - timeout" in text
+    assert "g/a" not in text  # 不再包含仓库/分支信息
+    await client.close()
+
+
 async def test_get_last_build_result(jenkins_client):
     with respx.mock(base_url="https://jk.example.com") as mock:
         mock.get("/job/app/lastBuild/api/json").respond(

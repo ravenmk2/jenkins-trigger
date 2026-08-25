@@ -50,11 +50,11 @@ class DingTalkClient:
         logger.info("钉钉通知已发送: {}", title)
 
     async def send_build_summary(self, job_name: str, results: list[BuildResult]) -> None:
-        ok = all(r.ok for r in results)
-        title = f"[{'成功' if ok else '失败'}] {job_name}"
+        title = f"Jenkins 报告: {job_name}"
         lines = [f"### {title}", ""]
         for r in results:
             icon = "✅" if r.ok else "❌"
-            detail = f"#{r.build_number} {r.result}" if r.build_number else (r.error or r.result or "-")
-            lines.append(f"- {icon} `{r.repo_path}` ({r.branch}) → {r.job}: {detail}")
+            number = f"#{r.build_number}" if r.build_number else "-"
+            status = r.result or r.error or "-"
+            lines.append(f"- {icon} {r.job} {number} {status}")
         await self.send_markdown(title, "\n".join(lines))
