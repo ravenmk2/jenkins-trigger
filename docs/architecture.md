@@ -80,7 +80,7 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
 
 | 端口 | 端点 | 说明 |
 | --- | --- | --- |
-| 8081 | `POST /webhook/gitlab/{instance-id}` | GitLab Webhook, 路径定位实例, 校验 `X-Gitlab-Token` |
+| 8081 | `POST /webhook/gitlab/{instance-id}` | GitLab Webhook, 路径定位实例, 校验 `X-Gitlab-Token`; 按 payload 的 `object_kind` 判断, 支持 Push Hook 与 System Hook |
 | 8080 | `GET /api/health` | 健康检查 |
 | 8080 | `GET /api/status` | 所有任务状态与最近一次执行结果 |
 

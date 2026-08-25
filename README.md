@@ -37,6 +37,8 @@ docker run -d \
 - Secret Token: 与该实例的 `webhook_token` 一致
 - 触发器: 勾选 **Push events**
 
+也兼容管理后台的 **System Hook**——按 payload 的 `object_kind` 判断事件类型(所有事件都带此字段), MR 合并产生的推送同样生效。
+
 ## 任务配置
 
 每个任务一个文件 `config/jobs/<job-id>.toml`, 示例见 `example/jobs/example.toml`。

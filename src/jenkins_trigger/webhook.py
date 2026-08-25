@@ -25,11 +25,12 @@ def create_webhook_app(config: AppConfig, executor: Executor) -> FastAPI:
             logger.warning("Webhook Token 校验失败: {} ({})", instance_id, request.client)
             return JSONResponse({"detail": "invalid token"}, status_code=401)
 
-        event_type = request.headers.get("X-Gitlab-Event", "")
-        if event_type != "Push Hook":
+        payload = await request.json()
+        # object_kind 是所有事件类型都带的字段; 项目钩子与系统/组钩子的 push 均为 "push"
+        if payload.get("object_kind") != "push":
+            event_type = request.headers.get("X-Gitlab-Event", "")
             return JSONResponse({"detail": f"ignored event: {event_type}"}, status_code=202)
 
-        payload = await request.json()
         ref = payload.get("ref", "")
         branch = ref.removeprefix("refs/heads/")
         repo_path = (payload.get("project") or {}).get("path_with_namespace", "")
