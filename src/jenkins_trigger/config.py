@@ -47,7 +47,7 @@ class ItemConfig(BaseModel):
     def _check_build_params(self) -> ItemConfig:
         # 非参数化构建按定义不带参数, 配了 build_params 属于配置错误, 启动即报
         if not self.parameterized and self.build_params:
-            raise ValueError(f"repo {self.repo}: build_params is not allowed when parameterized=false")
+            raise ValueError(f"Repo {self.repo}: build_params is not allowed when parameterized=false")
         return self
 
 
@@ -67,7 +67,7 @@ class JobConfig(BaseModel):
         # cron 表达式启动即校验, 配置错误直接报
         for expr in self.crons:
             if not croniter.is_valid(expr):
-                raise ValueError(f"job {self.id or self.name}: invalid cron expression '{expr}'")
+                raise ValueError(f"Job {self.id or self.name}: invalid cron expression '{expr}'")
         return self
 
     def branch_of(self, item: ItemConfig) -> str:
@@ -102,11 +102,11 @@ def load_config(config_dir: str | Path = "config") -> AppConfig:
             job = JobConfig.model_validate(tomllib.loads(file.read_text(encoding="utf-8")))
             job.id = file.stem
             if job.gitlab not in gitlabs:
-                raise ValueError(f"job {job.id}: GitLab instance '{job.gitlab}' not found")
+                raise ValueError(f"Job {job.id}: GitLab instance '{job.gitlab}' not found")
             if job.jenkins not in jenkins:
-                raise ValueError(f"job {job.id}: Jenkins instance '{job.jenkins}' not found")
+                raise ValueError(f"Job {job.id}: Jenkins instance '{job.jenkins}' not found")
             if job.dingtalk and job.dingtalk not in bots:
-                raise ValueError(f"job {job.id}: DingTalk bot '{job.dingtalk}' not found")
+                raise ValueError(f"Job {job.id}: DingTalk bot '{job.dingtalk}' not found")
             jobs[job.id] = job
 
     return AppConfig(gitlabs=gitlabs, jenkins=jenkins, dingtalk_bots=bots, jobs=jobs)

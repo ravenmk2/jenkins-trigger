@@ -184,10 +184,14 @@ class Executor:
         去抖窗口内的多个 (仓库, 分支) 累积到 triggers, 本轮一并执行。
         """
         state = self.states[job.id]
-        self._mark(state, time.monotonic() + job.delay)
+        execute_at = time.monotonic() + job.delay
+        self._mark(state, execute_at)
         state.triggers.add((repo, branch))
+        # execute_at 是 monotonic 时间, 换算为墙上时间便于阅读; 日志行首时间戳为同一天, 只打到时分秒
+        wall_at = time.strftime("%H:%M:%S", time.localtime(time.time() + job.delay))
         logger.bind(plan_id=state.plan_id).info(
-            "Job {} marked pending, executing in {}s ({} {})", job.id, job.delay, repo, branch
+            "Job {} marked pending, execute at {} (in {}s) ({} {})",
+            job.id, wall_at, job.delay, repo, branch,
         )
 
     def mark_scheduled(self, job: JobConfig) -> None:
