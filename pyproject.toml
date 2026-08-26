@@ -1,6 +1,6 @@
 [project]
 name = "jenkins-trigger"
-version = "0.1.0"
+version = "0.2.0"
 description = "Jenkins Job 自动化执行工具: 监听 GitLab Webhook 并按优先级编排触发 Jenkins Job"
 license = "MIT"
 requires-python = ">=3.14"
