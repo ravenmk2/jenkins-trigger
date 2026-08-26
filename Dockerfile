@@ -18,7 +18,7 @@ RUN uv sync --locked --no-dev
 FROM python:3.14-slim-bookworm
 
 LABEL org.opencontainers.image.title="jenkins-trigger" \
-      org.opencontainers.image.description="Trigger Jenkins jobs from GitLab push webhooks with priority-based orchestration" \
+      org.opencontainers.image.description="Trigger Jenkins jobs from cron schedules and GitLab push webhooks with stage-based orchestration" \
       org.opencontainers.image.source="https://github.com/ravenmk2/jenkins-trigger" \
       org.opencontainers.image.licenses="MIT"
 
@@ -29,9 +29,14 @@ COPY src ./src
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Run as a dedicated non-root user
+# Run as a dedicated non-root user; data dir writable by that user
 RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/data && chown app:app /app/data
+
+# 运行数据(分支 commit 记录)持久化卷
+VOLUME ["/app/data"]
+
 USER app
 
 EXPOSE 8080 8081

@@ -4,3 +4,4 @@ id = "main"
 name = "示例 GitLab"
 url = "https://gitlab.example.com"
 webhook_token = "change-me"  # GitLab Webhook 的 Secret Token
+api_token = ""  # GitLab API Token (需 read_api 权限); 为空则跳过该实例的 Changed 检测

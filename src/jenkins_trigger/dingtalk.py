@@ -13,6 +13,7 @@ from loguru import logger
 
 from .config import DingTalkBot
 from .jenkins import BuildResult
+from .planner import PlanItem
 
 WEBHOOK_URL = "https://oapi.dingtalk.com/robot/send"
 
@@ -46,23 +47,22 @@ class DingTalkClient:
         resp.raise_for_status()
         data = resp.json()
         if data.get("errcode") != 0:
-            raise RuntimeError(f"钉钉发送失败: {data}")
-        logger.info("钉钉通知已发送: {}", title)
+            raise RuntimeError(f"DingTalk send failed: {data}")
+        logger.info("DingTalk notification sent: {}", title)
 
-    async def send_build_started(self, job_name: str, exec_id: str,
-                                 triggers: list[tuple[str, str]]) -> None:
-        title = f"Jenkins 构建开始: {job_name}"
-        lines = [f"### {title}", "", f"执行 ID: `{exec_id}`", "", "已计划:"]
-        lines += [f"- `{repo}` ({branch})" for repo, branch in triggers]
+    async def send_build_started(self, job_name: str, plan_id: str,
+                                 plan: list[PlanItem]) -> None:
+        title = f"Jenkins Build Started: {job_name}"
+        lines = [f"### {title}", "", f"Plan ID: `{plan_id}`", "", "Planned:"]
+        lines += [f"- {p.item.name} ({p.reason})" for p in plan]
         await self.send_markdown(title, "\n".join(lines))
 
-    async def send_build_summary(self, job_name: str, exec_id: str,
+    async def send_build_summary(self, job_name: str, plan_id: str,
                                  results: list[BuildResult]) -> None:
-        title = f"Jenkins 构建结束: {job_name}"
-        lines = [f"### {title}", "", f"执行 ID: `{exec_id}`", ""]
+        title = f"Jenkins Build Finished: {job_name}"
+        lines = [f"### {title}", "", f"Plan ID: `{plan_id}`", ""]
         for r in results:
             icon = "✅" if r.ok else "❌"
             number = f"#{r.build_number}" if r.build_number else "-"
-            status = r.result or r.error or "-"
-            lines.append(f"- {icon} {r.job} {number} {status}")
+            lines.append(f"- {icon} {r.name} {number}")
         await self.send_markdown(title, "\n".join(lines))

@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from jenkins_trigger.config import load_config
 from jenkins_trigger.executor import Executor
+from jenkins_trigger.store import StateStore
 from jenkins_trigger.webhook import create_webhook_app
 
 PUSH_PAYLOAD = {
@@ -14,14 +15,14 @@ PUSH_PAYLOAD = {
 WEBHOOK_URL = "/webhook/gitlab/main"
 
 
-def _make_client():
+def _make_client(tmp_path):
     config = load_config("example")
-    executor = Executor(config)
+    executor = Executor(config, StateStore(tmp_path))
     return TestClient(create_webhook_app(config, executor)), executor
 
 
-def test_unknown_instance_rejected():
-    client, _ = _make_client()
+def test_unknown_instance_rejected(tmp_path):
+    client, _ = _make_client(tmp_path)
     resp = client.post(
         "/webhook/gitlab/nope",
         json=PUSH_PAYLOAD,
@@ -30,8 +31,8 @@ def test_unknown_instance_rejected():
     assert resp.status_code == 404
 
 
-def test_invalid_token_rejected():
-    client, _ = _make_client()
+def test_invalid_token_rejected(tmp_path):
+    client, _ = _make_client(tmp_path)
     resp = client.post(
         WEBHOOK_URL,
         json=PUSH_PAYLOAD,
@@ -40,8 +41,8 @@ def test_invalid_token_rejected():
     assert resp.status_code == 401
 
 
-def test_non_push_event_ignored():
-    client, _ = _make_client()
+def test_non_push_event_ignored(tmp_path):
+    client, _ = _make_client(tmp_path)
     resp = client.post(
         WEBHOOK_URL,
         json={"object_kind": "merge_request", "event_type": "merge_request"},
@@ -50,9 +51,9 @@ def test_non_push_event_ignored():
     assert resp.status_code == 202
 
 
-def test_system_hook_push_queued():
+def test_system_hook_push_queued(tmp_path):
     """System Hook(MR 合并等)的 push 事件同样入队, 不看 header 类型"""
-    client, executor = _make_client()
+    client, executor = _make_client(tmp_path)
     resp = client.post(
         WEBHOOK_URL,
         json=PUSH_PAYLOAD,
@@ -64,8 +65,8 @@ def test_system_hook_push_queued():
     assert event.branch == "master"
 
 
-def test_system_hook_non_push_ignored():
-    client, _ = _make_client()
+def test_system_hook_non_push_ignored(tmp_path):
+    client, _ = _make_client(tmp_path)
     resp = client.post(
         WEBHOOK_URL,
         json={"object_kind": "merge_request", "event_type": "merge_request"},
@@ -74,8 +75,8 @@ def test_system_hook_non_push_ignored():
     assert resp.status_code == 202
 
 
-def test_push_event_queued():
-    client, executor = _make_client()
+def test_push_event_queued(tmp_path):
+    client, executor = _make_client(tmp_path)
     resp = client.post(
         WEBHOOK_URL,
         json=PUSH_PAYLOAD,

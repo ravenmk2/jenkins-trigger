@@ -3,25 +3,30 @@ name = "示例发布任务"
 gitlab = "main"      # config/gitlab.toml 中的实例 ID
 jenkins = "main"     # config/jenkins.toml 中的实例 ID
 dingtalk = "ops"     # config/dingtalk.toml 中的机器人 ID, 删除此行则不通知
-delay = 60           # 执行延迟(秒), 期间再次 Push 会刷新计时(去抖)
+delay = 60           # Push 触发后的执行延迟(秒), 期间再次 Push 会刷新计时(去抖); cron 触发不走延迟
 default_branch = "master"
+# cron 触发表达式(服务器本地时区), 可配多个, 到点立即执行; 不需要则删除此行
+crons = ["0 8 * * *", "0 20 * * *"]
 
 [[items]]
+name = "后端服务 A"           # 显示名, 钉钉通知使用
 repo = "group/project-a"        # 带 group 的仓库路径
 job = "backend/project-a"       # Jenkins Job 路径
-priority = 1                    # 值越小优先级越高, 同优先级并行
+stage = 1                       # 执行分层(轻量 DAG): 值越小越早执行, 同 stage 并行
 parameterized = true            # 参数化构建: buildWithParameters
 # 构建参数(仅 parameterized=true 可用); 分支需要时显式写
 build_params = {BRANCH = "master", ENV = "prod"}
 
 [[items]]
+name = "后端服务 B"
 repo = "group/project-b"
 job = "backend/project-b"
-priority = 1
+stage = 1
 # parameterized 省略即 false: 纯触发 /job/<job>/build, 不带参数
 
 [[items]]
+name = "前端应用"
 repo = "group/frontend"
 job = "frontend/app"
 branch = "release"              # 覆盖默认触发分支
-priority = 2                    # 晚于 priority=1 的执行项
+stage = 2                       # 晚于 stage=1 的执行项

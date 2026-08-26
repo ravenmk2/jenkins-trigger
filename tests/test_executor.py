@@ -14,23 +14,29 @@ from jenkins_trigger.config import (
 from jenkins_trigger.executor import (
     STATUS_IDLE,
     STATUS_PENDING,
+    STATUS_PLANNING,
+    STATUS_RUNNING,
     Executor,
     PushEvent,
 )
 from jenkins_trigger.jenkins import BuildResult
+from jenkins_trigger.planner import REASON_PUSHED, PlanItem
+from jenkins_trigger.store import StateStore
 
 
 def make_config() -> AppConfig:
-    gitlab = GitLabInstance(id="gl", url="https://gl.example.com", webhook_token="t")
+    gitlab = GitLabInstance(
+        id="gl", url="https://gl.example.com", webhook_token="t", api_token="pat"
+    )
     jenkins = JenkinsInstance(id="jk", url="https://jk.example.com", username="u", token="t")
     bot = DingTalkBot(id="dt", token="t")
     job = JobConfig(
         id="job1", name="任务一", gitlab="gl", jenkins="jk", dingtalk="dt",
         delay=10, default_branch="master",
         items=[
-            ItemConfig(repo="g/a", job="jk/a", priority=2),
-            ItemConfig(repo="g/b", job="jk/b", priority=1),
-            ItemConfig(repo="g/c", job="jk/c", branch="release", priority=1),
+            ItemConfig(name="A", repo="g/a", job="jk/a", stage=2),
+            ItemConfig(name="B", repo="g/b", job="jk/b", stage=1),
+            ItemConfig(name="C", repo="g/c", job="jk/c", branch="release", stage=1),
         ],
     )
     return AppConfig(
@@ -54,7 +60,15 @@ class FakeJenkins:
         await asyncio.sleep(0)  # 让出事件循环
         self.ran.append((item.repo, branch))
         return BuildResult(repo_path=item.repo, job=item.job, branch=branch,
-                           build_number=1, result="SUCCESS")
+                           name=item.name, build_number=1, result="SUCCESS")
+
+
+class FakeGitLab:
+    def __init__(self, commits: dict | None = None):
+        self.commits = commits or {}  # (repo, branch) -> sha
+
+    async def get_branch_commit(self, repo, branch):
+        return self.commits.get((repo, branch))
 
 
 class FakeDingTalk:
@@ -62,24 +76,30 @@ class FakeDingTalk:
         self.started: list[tuple] = []
         self.summaries: list[tuple] = []
 
-    async def send_build_started(self, job_name, exec_id, triggers):
-        self.started.append((job_name, exec_id, triggers))
+    async def send_build_started(self, job_name, plan_id, plan):
+        self.started.append((job_name, plan_id, [(p.item.name, p.reason) for p in plan]))
 
-    async def send_build_summary(self, job_name, exec_id, results):
-        self.summaries.append((job_name, exec_id, results))
+    async def send_build_summary(self, job_name, plan_id, results):
+        self.summaries.append((job_name, plan_id, results))
 
 
-def make_executor(monkeypatch, last_results=None) -> tuple[Executor, FakeJenkins, FakeDingTalk]:
-    executor = Executor(make_config())
+def make_executor(monkeypatch, tmp_path, last_results=None, gitlab_commits=None):
+    executor = Executor(make_config(), StateStore(tmp_path))
     fake_jenkins = FakeJenkins(last_results)
+    fake_gitlab = FakeGitLab(gitlab_commits)
     fake_dingtalk = FakeDingTalk()
     monkeypatch.setattr(executor, "jenkins_client", lambda _: fake_jenkins)
+    monkeypatch.setattr(executor, "gitlab_client", lambda _: fake_gitlab)
     monkeypatch.setattr(executor, "dingtalk_client", lambda _: fake_dingtalk)
-    return executor, fake_jenkins, fake_dingtalk
+    return executor, fake_jenkins, fake_gitlab, fake_dingtalk
 
 
-def test_match_jobs(monkeypatch):
-    executor, _, _ = make_executor(monkeypatch)
+def plan_of(items, job) -> list[PlanItem]:
+    return [PlanItem(item=i, branch=job.branch_of(i), reason=REASON_PUSHED) for i in items]
+
+
+def test_match_jobs(monkeypatch, tmp_path):
+    executor, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     event = lambda gitlab_id, repo_path, branch: PushEvent(  # noqa: E731
         gitlab_id=gitlab_id, repo_path=repo_path, branch=branch
@@ -93,106 +113,89 @@ def test_match_jobs(monkeypatch):
     assert executor.match_jobs(event("gl", "g/unknown", "master")) == []
 
 
-def test_mark_pending_debounce(monkeypatch):
-    executor, _, _ = make_executor(monkeypatch)
+def test_mark_pending_debounce(monkeypatch, tmp_path):
+    executor, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     executor.mark_pending(job, "g/a", "master")
     first = executor.states["job1"].execute_at
-    first_exec_id = executor.states["job1"].exec_id
+    first_plan_id = executor.states["job1"].plan_id
     time.sleep(0.01)
     executor.mark_pending(job, "g/b", "master")
     state = executor.states["job1"]
     assert state.status == STATUS_PENDING
     assert state.execute_at > first  # 执行时间被刷新
-    assert state.exec_id == first_exec_id  # 同一轮 exec_id 不变
+    assert state.plan_id == first_plan_id  # 同一轮 plan_id 不变
     assert state.triggers == {("g/a", "master"), ("g/b", "master")}  # 多仓库累积
 
 
-async def test_exec_id_propagates_to_run_logs(monkeypatch):
-    """进入待执行时生成 exec_id(日期+流水号), 本轮执行的日志都带它"""
+def test_mark_scheduled_immediate(monkeypatch, tmp_path):
+    """cron 触发: 立即到期, 无 triggers"""
+    executor, *_ = make_executor(monkeypatch, tmp_path)
+    job = executor.config.jobs["job1"]
+    before = time.monotonic()
+    executor.mark_scheduled(job)
+    state = executor.states["job1"]
+    assert state.status == STATUS_PENDING
+    assert state.plan_id
+    assert before - 0.1 <= state.execute_at <= time.monotonic() + 0.1
+    assert state.triggers == set()
+
+
+async def test_plan_id_propagates_to_run_logs(monkeypatch, tmp_path):
+    """plan_id 格式 YYMMDD-HHMMSS(两位年, 补 0), 本轮执行的日志都带它"""
     import re
 
     from loguru import logger
 
-    executor, _, _ = make_executor(monkeypatch)
+    executor, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     seen = []
     handler_id = logger.add(
-        lambda m: seen.append(m.record["extra"].get("exec_id", "-")), level="INFO"
+        lambda m: seen.append(m.record["extra"].get("plan_id", "-")), level="INFO"
     )
     try:
         executor.mark_pending(job, "g/a", "master")
         state = executor.states["job1"]
-        assert state.exec_id is not None
-        assert re.fullmatch(r"\d{8}-\d{3}", state.exec_id)
+        assert state.plan_id is not None
+        assert re.fullmatch(r"\d{6}-\d{6}", state.plan_id)
         await executor._run(state)
     finally:
         logger.remove(handler_id)
-    # mark_pending 与 _run 内的日志都带同一个 exec_id, 且无占位符
-    assert seen and set(seen) == {state.exec_id}
+    # mark_pending 与 _run 内的日志都带同一个 plan_id, 且无占位符
+    assert seen and set(seen) == {state.plan_id}
 
 
-def test_exec_id_daily_sequence(monkeypatch):
-    """流水号当日递增, 跨天重新计数"""
-    executor, _, _ = make_executor(monkeypatch)
-    today = time.strftime("%Y%m%d")
-    assert executor._next_exec_id() == f"{today}-001"
-    assert executor._next_exec_id() == f"{today}-002"
-    # 模拟跨天: 计数日期与今天不同则重新计数
-    executor._exec_date = "20000101"
-    assert executor._next_exec_id() == f"{today}-001"
-
-
-async def test_make_plan_includes_failed(monkeypatch):
-    executor, _, _ = make_executor(monkeypatch, last_results={"jk/c": "FAILURE", "jk/b": "SUCCESS"})
+async def test_empty_plan_back_to_idle_without_notify(monkeypatch, tmp_path):
+    """cron 触发且无变更/失败: 计划为空, 不发通知, 回到空闲"""
+    executor, fake_jenkins, _, fake_dingtalk = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
-    # push g/a master: 计划起点只有 a(p2); c(p1) 上次失败也加入, 按优先级排序
-    plan = await executor._make_plan(job, {("g/a", "master")})
-    assert [(i.repo, i.job) for i in plan] == [("g/c", "jk/c"), ("g/a", "jk/a")]
-    # c 全部成功时不加入
-    executor2, _, _ = make_executor(monkeypatch, last_results={"jk/c": "SUCCESS"})
-    plan2 = await executor2._make_plan(job, {("g/a", "master")})
-    assert [(i.repo, i.job) for i in plan2] == [("g/a", "jk/a")]
+    executor.mark_scheduled(job)
+    state = executor.states["job1"]
+    await executor._run(state)
+    assert state.status == STATUS_IDLE
+    assert fake_jenkins.ran == []
+    assert fake_dingtalk.started == [] and fake_dingtalk.summaries == []
 
 
-async def test_same_repo_different_jobs_both_in_plan(monkeypatch):
-    """同一仓库绑定多个 Jenkins Job: 都进入计划; 完全相同项去重"""
-    executor, _, _ = make_executor(monkeypatch)
+async def test_execute_plan_stage_order(monkeypatch, tmp_path):
+    executor, fake, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
-    job.items.append(ItemConfig(repo="g/a", job="jk/a-deploy", priority=1))
-    job.items.append(ItemConfig(repo="g/a", job="jk/a", priority=3))  # 重复项, 应去重
-    plan = await executor._make_plan(job, {("g/a", "master")})
-    assert [(i.repo, i.job) for i in plan] == [("g/a", "jk/a-deploy"), ("g/a", "jk/a")]
-    # push 其它仓库时 g/a 的执行项不进入计划
-    plan2 = await executor._make_plan(job, {("g/b", "master")})
-    assert [(i.repo, i.job) for i in plan2] == [("g/b", "jk/b")]
-    # 同一窗口 push 多个仓库: 都进入计划
-    plan3 = await executor._make_plan(job, {("g/a", "master"), ("g/b", "master")})
-    assert [(i.repo, i.job) for i in plan3] == [
-        ("g/b", "jk/b"), ("g/a", "jk/a-deploy"), ("g/a", "jk/a"),
-    ]
-
-
-async def test_execute_plan_priority_order(monkeypatch):
-    executor, fake, _ = make_executor(monkeypatch)
-    job = executor.config.jobs["job1"]
-    plan = [job.items[1], job.items[0]]  # b(p1) 先于 a(p2)
+    plan = plan_of([job.items[1], job.items[0]], job)  # b(stage 1) 先于 a(stage 2)
     await executor._execute_plan(job, plan)
     assert fake.ran == [("g/b", "master"), ("g/a", "master")]
 
 
-async def test_same_priority_runs_parallel(monkeypatch):
-    executor, fake, _ = make_executor(monkeypatch)
+async def test_same_stage_runs_parallel(monkeypatch, tmp_path):
+    executor, fake, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
-    # b 和 c 都是 priority=1, 各自分支不同
-    plan = [job.items[1], job.items[2]]
-    results = await executor._execute_plan(job, plan)
+    # b 和 c 都是 stage=1, 各自分支不同
+    results = await executor._execute_plan(job, plan_of([job.items[1], job.items[2]], job))
     assert sorted(fake.ran) == [("g/b", "master"), ("g/c", "release")]
     assert all(r.ok for r in results)
 
 
-async def test_run_end_to_end_notifies(monkeypatch):
-    executor, fake_jenkins, fake_dingtalk = make_executor(monkeypatch)
+async def test_run_end_to_end_notifies(monkeypatch, tmp_path):
+    executor, fake_jenkins, _, fake_dingtalk = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     executor.mark_pending(job, "g/a", "master")
     state = executor.states["job1"]
@@ -200,34 +203,89 @@ async def test_run_end_to_end_notifies(monkeypatch):
     await executor._run(state)
     assert state.status == STATUS_IDLE
     assert fake_jenkins.ran == [("g/a", "master")]  # 只跑 push 仓库的执行项
-    # 开始 + 结束各一条通知, 都带 exec_id
-    assert fake_dingtalk.started == [("任务一", state.exec_id, [("g/a", "master")])]
+    # 开始 + 结束各一条通知, 都带 plan_id; 开始通知列出 name 与 reason
+    assert fake_dingtalk.started == [("任务一", state.plan_id, [("A", "Pushed")])]
     assert len(fake_dingtalk.summaries) == 1
-    assert fake_dingtalk.summaries[0][1] == state.exec_id
-    assert len(state.last_results) == 1
+    assert fake_dingtalk.summaries[0][1] == state.plan_id
+    assert state.last_results[0]["name"] == "A"
 
 
-async def test_scheduler_picks_up_due_jobs(monkeypatch):
+async def test_commit_updated_after_successful_build(monkeypatch, tmp_path):
+    executor, *_ = make_executor(
+        monkeypatch, tmp_path, gitlab_commits={("g/a", "master"): "sha-new"}
+    )
+    executor.store.set_commit("job1", "g/a", "master", "sha-old")
+    job = executor.config.jobs["job1"]
+    executor.mark_pending(job, "g/a", "master")
+    await executor._run(executor.states["job1"])
+    assert executor.store.get_commit("job1", "g/a", "master") == "sha-new"
+
+
+async def test_commit_kept_when_build_errors(monkeypatch, tmp_path):
+    """构建异常: 不回写 commit 记录, 下轮 Changed 自动重试"""
+    executor, fake_jenkins, *_ = make_executor(
+        monkeypatch, tmp_path, gitlab_commits={("g/a", "master"): "sha-new"}
+    )
+    executor.store.set_commit("job1", "g/a", "master", "sha-old")
+
+    async def run_item(item, branch):
+        return BuildResult(repo_path=item.repo, job=item.job, branch=branch,
+                           name=item.name, error="boom")
+
+    fake_jenkins.run_item = run_item
+    job = executor.config.jobs["job1"]
+    executor.mark_pending(job, "g/a", "master")
+    await executor._run(executor.states["job1"])
+    assert executor.store.get_commit("job1", "g/a", "master") == "sha-old"
+
+
+async def test_planning_state_visible(monkeypatch, tmp_path):
+    """计划生成期间状态为计划中"""
+    executor, _, fake_gitlab, _ = make_executor(monkeypatch, tmp_path)
+    gate = asyncio.Event()
+
+    async def get_branch_commit(repo, branch):
+        await gate.wait()
+        return None
+
+    fake_gitlab.get_branch_commit = get_branch_commit
+    job = executor.config.jobs["job1"]
+    state = executor.states["job1"]
+    executor.mark_pending(job, "g/a", "master")
+    run_task = asyncio.create_task(executor._run(state))
+    try:
+        for _ in range(200):
+            if state.status == STATUS_PLANNING:
+                break
+            await asyncio.sleep(0.005)
+        assert state.status == STATUS_PLANNING
+    finally:
+        gate.set()
+        await run_task
+    assert state.status == STATUS_IDLE
+
+
+async def test_dispatcher_picks_up_due_jobs(monkeypatch, tmp_path):
     import jenkins_trigger.executor as mod
 
-    monkeypatch.setattr(mod, "SCHEDULER_INTERVAL", 0.01)
-    executor, fake, _ = make_executor(monkeypatch)
+    monkeypatch.setattr(mod, "DISPATCH_INTERVAL", 0.01)
+    executor, fake, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     job.delay = 0
-    scheduler = asyncio.create_task(executor._scheduler())
+    dispatcher = asyncio.create_task(executor._dispatcher())
     try:
         executor.mark_pending(job, "g/a", "master")
         await asyncio.wait_for(fake.started.setdefault("g/a", asyncio.Event()).wait(), 2)
     finally:
-        scheduler.cancel()
+        dispatcher.cancel()
 
 
-async def test_remark_while_running_triggers_second_run(monkeypatch):
+async def test_remark_while_running_triggers_second_run(monkeypatch, tmp_path):
     """执行中收到事件: 重新标记待执行, 当前执行完成后再跑一轮"""
     import jenkins_trigger.executor as mod
 
-    monkeypatch.setattr(mod, "SCHEDULER_INTERVAL", 0.01)
-    executor, fake, _ = make_executor(monkeypatch)
+    monkeypatch.setattr(mod, "DISPATCH_INTERVAL", 0.01)
+    executor, fake, *_ = make_executor(monkeypatch, tmp_path)
     job = executor.config.jobs["job1"]
     job.delay = 0
     state = executor.states["job1"]
@@ -242,19 +300,41 @@ async def test_remark_while_running_triggers_second_run(monkeypatch):
         if len(fake.ran) == 2:
             second_done.set()
         return BuildResult(repo_path=item.repo, job=item.job, branch=branch,
-                           build_number=1, result="SUCCESS")
+                           name=item.name, build_number=1, result="SUCCESS")
 
     fake.run_item = run_item
-    scheduler = asyncio.create_task(executor._scheduler())
+    dispatcher = asyncio.create_task(executor._dispatcher())
     try:
         executor.mark_pending(job, "g/a", "master")
         while not fake.ran:  # 等第一轮开始
             await asyncio.sleep(0.005)
-        assert state.status == "执行中"
+        assert state.status == STATUS_RUNNING
         executor.mark_pending(job, "g/b", "master")  # 执行中收到事件
         assert state.status == STATUS_PENDING  # 被重新标记
         gate.set()  # 第一轮结束
         await asyncio.wait_for(second_done.wait(), 2)
         assert fake.ran == [("g/a", "master"), ("g/b", "master")]  # 接力执行
     finally:
-        scheduler.cancel()
+        dispatcher.cancel()
+
+
+async def test_backfill_baselines(monkeypatch, tmp_path):
+    """启动补齐: 缺失的补录, 已有的保留, 查询无结果的跳过"""
+    executor = Executor(make_config(), StateStore(tmp_path))
+    fake_gitlab = FakeGitLab({("g/a", "master"): "sha-a", ("g/c", "release"): "sha-c"})
+    monkeypatch.setattr(executor, "gitlab_client", lambda _: fake_gitlab)
+    executor.store.set_commit("job1", "g/a", "master", "existing")
+    await executor._backfill_baselines()
+    assert executor.store.get_commit("job1", "g/a", "master") == "existing"  # 已有保留
+    assert executor.store.get_commit("job1", "g/c", "release") == "sha-c"  # 缺失补齐
+    assert executor.store.get_commit("job1", "g/b", "master") is None  # 无结果跳过
+
+
+async def test_backfill_skips_without_api_token(tmp_path):
+    """实例未配 api_token: 跳过补齐, 不报错"""
+    config = make_config()
+    config.gitlabs["gl"].api_token = ""
+    executor = Executor(config, StateStore(tmp_path))
+    await executor._backfill_baselines()
+    assert executor.store.get_commit("job1", "g/a", "master") is None
+    assert executor.gitlab_client("gl") is None

@@ -21,6 +21,7 @@ class BuildResult(BaseModel):
     repo_path: str
     job: str
     branch: str
+    name: str = ""  # 执行项显示名, 钉钉通知使用
     build_number: int | None = None
     result: str | None = None  # SUCCESS / FAILURE / ABORTED / ...
     error: str | None = None  # 触发/查询阶段异常
@@ -77,8 +78,8 @@ class JenkinsClient:
         resp.raise_for_status()
         queue_url = resp.headers.get("Location")
         if not queue_url:
-            raise RuntimeError(f"Jenkins 未返回 queue URL: {item.job}")
-        logger.info("已触发 Jenkins Job {} (分支 {}), queue: {}", item.job, branch, queue_url)
+            raise RuntimeError(f"Jenkins did not return a queue URL: {item.job}")
+        logger.info("Triggered Jenkins job {} (branch {}), queue: {}", item.job, branch, queue_url)
         return queue_url
 
     async def wait_for_build_number(self, queue_url: str, timeout: float = 300) -> tuple[str, int]:
@@ -93,9 +94,9 @@ class JenkinsClient:
                 if executable and executable.get("number") is not None:
                     return executable["url"], executable["number"]
                 if data.get("cancelled"):
-                    raise RuntimeError("queue item 被取消")
+                    raise RuntimeError("Queue item was cancelled")
             if time.monotonic() > deadline:
-                raise TimeoutError(f"等待 queue 分配超时: {queue_url}")
+                raise TimeoutError(f"Timed out waiting for queue item allocation: {queue_url}")
             await asyncio.sleep(3)
 
     async def get_last_build_result(self, job_path: str) -> str | None:
@@ -121,18 +122,18 @@ class JenkinsClient:
             if not data.get("building"):
                 return data.get("result") or "UNKNOWN"
             if time.monotonic() > deadline:
-                raise TimeoutError(f"等待构建完成超时: {build_url}")
+                raise TimeoutError(f"Timed out waiting for build completion: {build_url}")
             await asyncio.sleep(POLL_INTERVAL)
 
     async def run_item(self, item: ItemConfig, branch: str) -> BuildResult:
         """触发并等待单个执行项的构建结果"""
-        result = BuildResult(repo_path=item.repo, job=item.job, branch=branch)
+        result = BuildResult(repo_path=item.repo, job=item.job, branch=branch, name=item.name)
         try:
             queue_url = await self.trigger(item, branch)
             build_url, number = await self.wait_for_build_number(queue_url)
             result.build_number = number
             result.result = await self.wait_build_completed(build_url)
         except Exception as exc:  # noqa: BLE001 - 汇总到结果, 不中断其它 Job
-            logger.error("仓库 {} 构建异常: {}", item.repo, exc)
+            logger.error("Build error for repo {}: {}", item.repo, exc)
             result.error = str(exc)
         return result

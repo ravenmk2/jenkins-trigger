@@ -12,7 +12,10 @@ def test_load_example_config():
     job = config.jobs["example"]
     assert job.name == "示例发布任务"
     assert job.delay == 60
+    assert job.crons == ["0 8 * * *", "0 20 * * *"]
     assert len(job.items) == 3
+    # 显示名
+    assert [i.name for i in job.items] == ["后端服务 A", "后端服务 B", "前端应用"]
     # 分支覆盖
     assert job.branch_of(job.items[0]) == "master"
     assert job.branch_of(job.items[2]) == "release"
@@ -25,13 +28,31 @@ def test_load_example_config():
     assert job.items[1].build_params == {}
 
 
+def test_item_name_required():
+    from pydantic import ValidationError
+
+    from jenkins_trigger.config import ItemConfig
+
+    with pytest.raises(ValidationError, match="name"):
+        ItemConfig(repo="g/a", job="a")
+
+
+def test_invalid_cron_rejected():
+    from pydantic import ValidationError
+
+    from jenkins_trigger.config import JobConfig
+
+    with pytest.raises(ValidationError, match="cron"):
+        JobConfig(name="j", gitlab="g", jenkins="j", crons=["not a cron"])
+
+
 def test_non_parameterized_rejects_build_params():
     from pydantic import ValidationError
 
     from jenkins_trigger.config import ItemConfig
 
     with pytest.raises(ValidationError, match="parameterized"):
-        ItemConfig(repo="g/a", job="a", build_params={"X": "1"})
+        ItemConfig(name="a", repo="g/a", job="a", build_params={"X": "1"})
 
 
 def test_invalid_reference(tmp_path):

@@ -1,7 +1,7 @@
 [project]
 name = "jenkins-trigger"
 version = "0.2.0"
-description = "Jenkins Job 自动化执行工具: 监听 GitLab Webhook 并按优先级编排触发 Jenkins Job"
+description = "Jenkins Job 自动化执行工具: 支持 cron 定时与 GitLab Webhook 触发, 按 stage 分层编排 Jenkins Job"
 license = "MIT"
 requires-python = ">=3.14"
 dependencies = [
@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.27",
     "loguru>=0.7",
     "pydantic>=2.7",
+    "croniter>=6.2.4",
 ]
 
 [dependency-groups]

@@ -22,7 +22,7 @@ def create_webhook_app(config: AppConfig, executor: Executor) -> FastAPI:
         if not instance:
             return JSONResponse({"detail": f"unknown instance: {instance_id}"}, status_code=404)
         if request.headers.get("X-Gitlab-Token", "") != instance.webhook_token:
-            logger.warning("Webhook Token 校验失败: {} ({})", instance_id, request.client)
+            logger.warning("Webhook token verification failed: {} ({})", instance_id, request.client)
             return JSONResponse({"detail": "invalid token"}, status_code=401)
 
         payload = await request.json()
@@ -38,7 +38,7 @@ def create_webhook_app(config: AppConfig, executor: Executor) -> FastAPI:
             return JSONResponse({"detail": "missing ref or project path"}, status_code=400)
 
         await executor.enqueue(PushEvent(gitlab_id=instance_id, repo_path=repo_path, branch=branch))
-        logger.info("收到 Push 事件: {} {} {}", instance_id, repo_path, branch)
+        logger.info("Push event received: {} {} {}", instance_id, repo_path, branch)
         return JSONResponse({"status": "queued"})
 
     return app
