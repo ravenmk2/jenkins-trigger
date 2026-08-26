@@ -72,7 +72,7 @@ GitLab Push ──HTTP──> webhook.py (路径定位实例, 校验 X-Gitlab-To
               构建正常结束 → 回写 commit 记录 (异常不回写, 下轮 Changed 重试)
                            │
                            ▼
-              钉钉 "Jenkins 构建结束" (✅/❌ + name + 构建号)
+              钉钉 "Jenkins 构建结束" (✅/❌ + name + 构建号; 失败项为 Jenkins 链接)
               通知均携带计划 ID (plan_id)
 ```
 

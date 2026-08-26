@@ -311,7 +311,7 @@ class Executor:
             return
         try:
             await self.dingtalk_client(job.dingtalk).send_build_summary(
-                job.name, plan_id, results
+                job.name, plan_id, results, self.config.jenkins[job.jenkins].url
             )
         except Exception:
             logger.exception("Job {}: failed to send DingTalk summary notification", job.id)

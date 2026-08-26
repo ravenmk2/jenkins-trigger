@@ -116,15 +116,19 @@ async def test_build_notifications():
         BuildResult(repo_path="g/a", job="backend/app", branch="master",
                     name="后端 A", build_number=42, result="SUCCESS"),
         BuildResult(repo_path="g/b", job="backend/b", branch="master",
-                    name="前端 B", error="timeout"),
+                    name="前端 B", build_number=7, result="FAILURE"),
+        BuildResult(repo_path="g/c", job="backend/c", branch="master",
+                    name="工具 C", error="timeout"),
     ]
-    await client.send_build_summary("发布任务", "260826-143052", results)
+    await client.send_build_summary("发布任务", "260826-143052", results,
+                                    "https://jk.example.com/")
     title, text = sent[1]
     assert title == "Jenkins Build Finished: 发布任务"
     assert "260826-143052" in text
-    # 结束通知: 图标 + name + 构建号, 无末尾状态文字
+    # 结束通知: 成功项为纯文本; 失败项渲染为 Jenkins 链接(有构建号链到该次构建, 否则链到 Job 页)
     assert "- ✅ 后端 A #42" in text
-    assert "- ❌ 前端 B -" in text
+    assert "- ❌ [前端 B #7](https://jk.example.com/job/backend/job/b/7/)" in text
+    assert "- ❌ [工具 C](https://jk.example.com/job/backend/job/c/)" in text
     assert "SUCCESS" not in text and "timeout" not in text
     await client.close()
 

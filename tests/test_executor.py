@@ -79,7 +79,7 @@ class FakeDingTalk:
     async def send_build_started(self, job_name, plan_id, plan):
         self.started.append((job_name, plan_id, [(p.item.name, p.reason) for p in plan]))
 
-    async def send_build_summary(self, job_name, plan_id, results):
+    async def send_build_summary(self, job_name, plan_id, results, jenkins_url=None):
         self.summaries.append((job_name, plan_id, results))
 
 

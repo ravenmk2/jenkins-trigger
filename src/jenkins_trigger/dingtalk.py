@@ -12,7 +12,7 @@ import httpx
 from loguru import logger
 
 from .config import DingTalkBot
-from .jenkins import BuildResult
+from .jenkins import BuildResult, job_url_path
 from .planner import PlanItem
 
 WEBHOOK_URL = "https://oapi.dingtalk.com/robot/send"
@@ -58,11 +58,19 @@ class DingTalkClient:
         await self.send_markdown(title, "\n".join(lines))
 
     async def send_build_summary(self, job_name: str, plan_id: str,
-                                 results: list[BuildResult]) -> None:
+                                 results: list[BuildResult], jenkins_url: str) -> None:
         title = f"Jenkins Build Finished: {job_name}"
         lines = [f"### {title}", "", f"Plan ID: `{plan_id}`", ""]
+        base = jenkins_url.rstrip("/")
         for r in results:
             icon = "✅" if r.ok else "❌"
-            number = f"#{r.build_number}" if r.build_number else "-"
-            lines.append(f"- {icon} {r.name} {number}")
+            label = f"{r.name} #{r.build_number}" if r.build_number else r.name
+            if r.ok:
+                lines.append(f"- {icon} {label}")
+            else:
+                # 失败项渲染为 Jenkins 链接: 有构建号链到该次构建, 否则链到 Job 页
+                url = f"{base}/{job_url_path(r.job)}/"
+                if r.build_number:
+                    url += f"{r.build_number}/"
+                lines.append(f"- {icon} [{label}]({url})")
         await self.send_markdown(title, "\n".join(lines))
