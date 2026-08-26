@@ -7,12 +7,10 @@ WORKDIR /app
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1
 
-# Install dependencies first to leverage build cache
+# Install dependencies only; the project itself stays out of the venv so that
+# code-only changes leave this layer (and the runtime .venv layer) untouched
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
-
-COPY src ./src
-RUN uv sync --locked --no-dev
 
 # ---- Runtime stage: plain Python, no uv / build tooling ----
 FROM python:3.14-slim-bookworm
@@ -27,7 +25,8 @@ WORKDIR /app
 COPY --from=builder /app/.venv ./.venv
 COPY src ./src
 
-ENV PATH="/app/.venv/bin:$PATH"
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src"
 
 # Run as a dedicated non-root user; data dir writable by that user
 RUN groupadd --gid 10001 app \
