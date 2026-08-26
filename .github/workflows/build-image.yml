@@ -1,4 +1,4 @@
-name: docker
+name: build-image
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run pytest -q
 
-  docker:
+  build:
     needs: test
     runs-on: ubuntu-latest
     permissions:
