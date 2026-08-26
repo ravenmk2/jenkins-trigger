@@ -55,6 +55,15 @@ async def test_pushed_repo_in_plan(tmp_path):
     assert [(p.item.repo, p.reason) for p in plan] == [("g/a", REASON_PUSHED)]
 
 
+async def test_pushed_reason_with_author(tmp_path):
+    """有推送人时 Pushed 原因标注作者; 无作者时保持原样"""
+    planner, _, gitlab = make_planner(tmp_path)
+    job = make_job()
+    plan = await planner.make_plan(job, {("g/a", "master")}, FakeJenkins(), gitlab,
+                                   authors={("g/a", "master"): "张三"})
+    assert plan[0].reason == "Pushed by 张三"
+
+
 async def test_failed_build_retries(tmp_path):
     planner, _, gitlab = make_planner(tmp_path)
     job = make_job()

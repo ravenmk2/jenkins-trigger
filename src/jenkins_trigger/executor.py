@@ -34,6 +34,7 @@ class PushEvent(BaseModel):
     gitlab_id: str
     repo_path: str  # 带 group 的路径
     branch: str
+    author: str = ""  # 推送人 (GitLab user_name), 用于通知中标注触发作者
 
 
 class JobState(BaseModel):
@@ -42,6 +43,7 @@ class JobState(BaseModel):
     execute_at: float | None = None  # time.monotonic()
     plan_id: str | None = None  # 计划 ID: 一轮执行一个 (YYMMDD-HHMMSS, 本地时间)
     triggers: set[tuple[str, str]] = Field(default_factory=set)  # 待执行的 (仓库, 分支) 集合
+    trigger_authors: dict[tuple[str, str], str] = Field(default_factory=dict)  # 各触发的推送人
     last_results: list[dict] = Field(default_factory=list)
 
     def snapshot(self) -> dict:
@@ -163,7 +165,7 @@ class Executor:
             logger.debug("No job matched: {} {} {}", event.gitlab_id, event.repo_path, event.branch)
             return
         for job in matched:
-            self.mark_pending(job, event.repo_path, event.branch)
+            self.mark_pending(job, event.repo_path, event.branch, event.author)
 
     def match_jobs(self, event: PushEvent) -> list[JobConfig]:
         """按 GitLab 实例 + 仓库路径 + 分支(仓库分支覆盖默认分支)匹配任务"""
@@ -178,7 +180,7 @@ class Executor:
                 matched.append(job)
         return matched
 
-    def mark_pending(self, job: JobConfig, repo: str, branch: str) -> None:
+    def mark_pending(self, job: JobConfig, repo: str, branch: str, author: str = "") -> None:
         """Push 触发: 标记待执行并刷新执行时间(当前时间+延迟), 实现去抖
 
         去抖窗口内的多个 (仓库, 分支) 累积到 triggers, 本轮一并执行。
@@ -187,6 +189,8 @@ class Executor:
         execute_at = time.monotonic() + job.delay
         self._mark(state, execute_at)
         state.triggers.add((repo, branch))
+        if author:
+            state.trigger_authors[(repo, branch)] = author
         # execute_at 是 monotonic 时间, 换算为墙上时间便于阅读; 日志行首时间戳为同一天, 只打到时分秒
         wall_at = time.strftime("%H:%M:%S", time.localtime(time.time() + job.delay))
         logger.bind(plan_id=state.plan_id).info(
@@ -226,7 +230,9 @@ class Executor:
         job = state.job
         # 取走本轮触发集合并清空: 执行期间新到的事件进入下一轮
         triggers = set(state.triggers)
+        authors = dict(state.trigger_authors)
         state.triggers.clear()
+        state.trigger_authors.clear()
         self._running.add(job.id)
         state.status = STATUS_PLANNING
         # 本轮执行内所有日志(含 planner/jenkins/dingtalk 模块)都带 plan_id
@@ -237,6 +243,7 @@ class Executor:
                 plan = await self.planner.make_plan(
                     job, triggers,
                     self.jenkins_client(job.jenkins), self.gitlab_client(job.gitlab),
+                    authors,
                 )
                 if not plan:
                     logger.info("Job {} plan is empty, skipped", job.id)

@@ -210,6 +210,18 @@ async def test_run_end_to_end_notifies(monkeypatch, tmp_path):
     assert state.last_results[0]["name"] == "A"
 
 
+async def test_push_author_propagates_to_notification(monkeypatch, tmp_path):
+    """带作者的 push: 记录到 trigger_authors, 开始通知的 reason 标注作者, 本轮结束后清空"""
+    executor, _, _, fake_dingtalk = make_executor(monkeypatch, tmp_path)
+    job = executor.config.jobs["job1"]
+    executor.mark_pending(job, "g/a", "master", "张三")
+    state = executor.states["job1"]
+    assert state.trigger_authors == {("g/a", "master"): "张三"}
+    await executor._run(state)
+    assert state.trigger_authors == {}
+    assert fake_dingtalk.started == [("任务一", state.plan_id, [("A", "Pushed by 张三")])]
+
+
 async def test_commit_updated_after_successful_build(monkeypatch, tmp_path):
     executor, *_ = make_executor(
         monkeypatch, tmp_path, gitlab_commits={("g/a", "master"): "sha-new"}

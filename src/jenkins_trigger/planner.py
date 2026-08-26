@@ -41,6 +41,7 @@ class Planner:
         triggers: set[tuple[str, str]],
         jenkins: JenkinsClient,
         gitlab: GitLabClient | None,
+        authors: dict[tuple[str, str], str] | None = None,
     ) -> list[PlanItem]:
         """制定执行计划; 以 (repo, job) 去重, 按 stage 排序"""
         plan: dict[tuple[str, str], PlanItem] = {}
@@ -82,12 +83,15 @@ class Planner:
                     commit=commits.get((item.repo, branch)),
                 )
 
-        # 3. Pushed: Push 事件标记的仓库 (覆盖一切)
+        # 3. Pushed: Push 事件标记的仓库 (覆盖一切); 有推送人时在原因后标注作者
+        authors = authors or {}
         for item in job.items:
             branch = job.branch_of(item)
             if (item.repo, branch) in triggers:
+                author = authors.get((item.repo, branch), "")
+                reason = f"{REASON_PUSHED} by {author}" if author else REASON_PUSHED
                 plan[(item.repo, item.job)] = PlanItem(
-                    item=item, branch=branch, reason=REASON_PUSHED,
+                    item=item, branch=branch, reason=reason,
                     commit=commits.get((item.repo, branch)),
                 )
 

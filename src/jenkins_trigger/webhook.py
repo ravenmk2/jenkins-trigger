@@ -37,7 +37,10 @@ def create_webhook_app(config: AppConfig, executor: Executor) -> FastAPI:
         if not branch or not repo_path:
             return JSONResponse({"detail": "missing ref or project path"}, status_code=400)
 
-        await executor.enqueue(PushEvent(gitlab_id=instance_id, repo_path=repo_path, branch=branch))
+        # Push Hook 自带 user_name (推送人), 用于通知消息中标注触发作者
+        author = payload.get("user_name", "")
+        await executor.enqueue(PushEvent(gitlab_id=instance_id, repo_path=repo_path,
+                                         branch=branch, author=author))
         logger.info("Push event received: {} {} {}", instance_id, repo_path, branch)
         return JSONResponse({"status": "queued"})
 
