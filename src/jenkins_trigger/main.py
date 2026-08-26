@@ -31,7 +31,7 @@ async def serve() -> None:
     config_dir = os.getenv("JENKINS_TRIGGER_CONFIG", "config")
     config = load_config(config_dir)
     logger.info(
-        "Config loaded: {} GitLab / {} Jenkins / {} DingTalk bots / {} jobs",
+        "Config loaded: {} GitLab / {} Jenkins / {} DingTalk Bots / {} Jobs",
         len(config.gitlabs), len(config.jenkins), len(config.dingtalk_bots), len(config.jobs),
     )
 
