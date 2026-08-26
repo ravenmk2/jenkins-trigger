@@ -235,8 +235,10 @@ class Executor:
         state.trigger_authors.clear()
         self._running.add(job.id)
         state.status = STATUS_PLANNING
+        # plan_id 固定为本地变量: 执行期间被重新标记会改写 state.plan_id, 本轮通知/日志不能跟着变
+        plan_id = state.plan_id or "-"
         # 本轮执行内所有日志(含 planner/jenkins/dingtalk 模块)都带 plan_id
-        with logger.contextualize(plan_id=state.plan_id or "-"):
+        with logger.contextualize(plan_id=plan_id):
             trigger_desc = ", ".join(f"{r} {b}" for r, b in sorted(triggers)) or "cron"
             logger.info("Job {} started ({})", job.id, trigger_desc)
             try:
@@ -248,7 +250,7 @@ class Executor:
                 if not plan:
                     logger.info("Job {} plan is empty, skipped", job.id)
                     return
-                await self._notify_started(job, state, plan)
+                await self._notify_started(job, plan_id, plan)
                 state.status = STATUS_RUNNING
                 results = await self._execute_plan(job, plan)
                 self._update_commits(job, plan, results)
@@ -257,7 +259,7 @@ class Executor:
                      "build_number": r.build_number, "result": r.result, "error": r.error}
                     for r in results
                 ]
-                await self._notify(job, state, results)
+                await self._notify(job, plan_id, results)
             except Exception:
                 logger.exception("Job {} execution failed", job.id)
             finally:
@@ -292,24 +294,24 @@ class Executor:
                 self.store.set_commit(job.id, p.item.repo, p.branch, p.commit)
 
     async def _notify_started(
-        self, job: JobConfig, state: JobState, plan: list[PlanItem]
+        self, job: JobConfig, plan_id: str, plan: list[PlanItem]
     ) -> None:
         """计划生成后的开始通知(列出计划项 name 与 reason)"""
         if not job.dingtalk:
             return
         try:
             await self.dingtalk_client(job.dingtalk).send_build_started(
-                job.name, state.plan_id or "-", plan
+                job.name, plan_id, plan
             )
         except Exception:
             logger.exception("Job {}: failed to send DingTalk start notification", job.id)
 
-    async def _notify(self, job: JobConfig, state: JobState, results: list[BuildResult]) -> None:
+    async def _notify(self, job: JobConfig, plan_id: str, results: list[BuildResult]) -> None:
         if not job.dingtalk:
             return
         try:
             await self.dingtalk_client(job.dingtalk).send_build_summary(
-                job.name, state.plan_id or "-", results
+                job.name, plan_id, results
             )
         except Exception:
             logger.exception("Job {}: failed to send DingTalk summary notification", job.id)

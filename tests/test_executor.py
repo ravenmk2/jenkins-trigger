@@ -222,6 +222,42 @@ async def test_push_author_propagates_to_notification(monkeypatch, tmp_path):
     assert fake_dingtalk.started == [("任务一", state.plan_id, [("A", "Pushed by 张三")])]
 
 
+async def test_notifications_use_own_round_plan_id(monkeypatch, tmp_path):
+    """执行中收到新事件重新标记后, 本轮通知仍用本轮 plan_id, 不读被覆盖的 state.plan_id"""
+    executor, fake, _, fake_dingtalk = make_executor(monkeypatch, tmp_path)
+    ids = iter(["p1", "p2", "p3"])
+    executor._new_plan_id = lambda: next(ids)
+    job = executor.config.jobs["job1"]
+    executor.mark_pending(job, "g/a", "master")
+    state = executor.states["job1"]
+    assert state.plan_id == "p1"
+
+    gate = asyncio.Event()  # 卡住第一轮构建, 模拟执行中
+
+    async def run_item(item, branch):
+        await gate.wait()
+        return await FakeJenkins().run_item(item, branch)
+
+    fake.run_item = run_item
+    run_task = asyncio.create_task(executor._run(state))
+    try:
+        await asyncio.sleep(0.05)  # 等第一轮进入执行
+        assert state.status == STATUS_RUNNING
+        executor.mark_pending(job, "g/b", "master")  # 执行中收到新事件 → 下一轮 plan_id
+        assert state.plan_id == "p2"
+        gate.set()
+        await run_task
+    finally:
+        gate.set()
+    # 第一轮的开始/结束通知都带 p1
+    assert fake_dingtalk.started == [("任务一", "p1", [("A", "Pushed")])]
+    assert fake_dingtalk.summaries[0][1] == "p1"
+    # 第二轮用 p2
+    await executor._run(state)
+    assert fake_dingtalk.started[1] == ("任务一", "p2", [("B", "Pushed")])
+    assert fake_dingtalk.summaries[1][1] == "p2"
+
+
 async def test_commit_updated_after_successful_build(monkeypatch, tmp_path):
     executor, *_ = make_executor(
         monkeypatch, tmp_path, gitlab_commits={("g/a", "master"): "sha-new"}
