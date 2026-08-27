@@ -22,18 +22,23 @@ LABEL org.opencontainers.image.title="jenkins-trigger" \
 
 WORKDIR /app
 
+# Create the user and data dir before COPY: this layer is independent of
+# code/dependencies, so source changes never invalidate it.
+# Never RUN chown -R after COPY: re-owning files from a previous layer
+# copies the entire .venv into the new layer.
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app/data && chown app:app /app/data
+
+# Keep .venv / src root-owned; app only needs read+execute, which also stops
+# the runtime process from tampering with code and dependencies
 COPY --from=builder /app/.venv ./.venv
 COPY src ./src
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH="/app/src"
 
-# Run as a dedicated non-root user; data dir writable by that user
-RUN groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid app --no-create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /app/data && chown app:app /app/data
-
-# 运行数据(分支 commit 记录)持久化卷
+# Persistent volume for runtime data (branch commit records)
 VOLUME ["/app/data"]
 
 USER app
