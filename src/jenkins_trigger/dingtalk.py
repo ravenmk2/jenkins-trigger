@@ -52,16 +52,16 @@ class DingTalkClient:
 
     async def send_build_started(self, job_name: str, plan_id: str,
                                  plan: list[PlanItem]) -> None:
-        # 标题用固定文案, Job/Plan 放正文引用块单行
+        # 标题用固定文案, Job/Plan 放正文列表(列表项保证换行)
         title = "Jenkins Build Started"
-        lines = [f"### {title}", "", f"> {job_name} / {plan_id}", ""]
+        lines = [f"### {title}", "", f"- Job: {job_name}", f"- Plan: {plan_id}"]
         lines += [f"- ⏳ {p.item.name} ({p.reason})" for p in plan]
         await self.send_markdown(title, "\n".join(lines))
 
     async def send_build_summary(self, job_name: str, plan_id: str,
                                  results: list[BuildResult], jenkins_url: str) -> None:
         title = "Jenkins Build Finished"
-        lines = [f"### {title}", "", f"> {job_name} / {plan_id}", ""]
+        lines = [f"### {title}", "", f"- Job: {job_name}", f"- Plan: {plan_id}"]
         base = jenkins_url.rstrip("/")
         for r in results:
             icon = "✅" if r.ok else "❌"
