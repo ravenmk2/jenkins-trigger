@@ -105,7 +105,9 @@ async def test_build_notifications():
     ]
     await client.send_build_started("发布任务", "260826-143052", plan)
     title, text = sent[0]
-    assert title == "Jenkins Build Started: 发布任务"
+    # 标题为固定文案, Job 名称在正文
+    assert title == "Jenkins Build Started"
+    assert "Job: 发布任务" in text
     assert "Plan ID: `260826-143052`" in text
     # 开始通知只列 name + reason, 不含仓库/分支
     assert "- 后端 A (Pushed)" in text
@@ -123,7 +125,8 @@ async def test_build_notifications():
     await client.send_build_summary("发布任务", "260826-143052", results,
                                     "https://jk.example.com/")
     title, text = sent[1]
-    assert title == "Jenkins Build Finished: 发布任务"
+    assert title == "Jenkins Build Finished"
+    assert "Job: 发布任务" in text
     assert "260826-143052" in text
     # 结束通知: 成功项为纯文本; 失败项渲染为 Jenkins 链接(有构建号链到该次构建, 否则链到 Job 页)
     assert "- ✅ 后端 A #42" in text
